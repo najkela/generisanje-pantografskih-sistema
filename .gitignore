@@ -1,0 +1,11 @@
+.venv/
+.claude/settings.local.json
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+results/*
+!results/.gitkeep
+помоћни фајлови/*.pdf
+*.egg-info/
+_za_brisanje/
