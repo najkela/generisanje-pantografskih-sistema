@@ -1,11 +1,58 @@
+# ============================================================
+# У гит иде само пројектни кôд и документација.
+# Све локално — окружење, кеш тестова, подешавања алата — остаје напољу.
+# ============================================================
+
+# --- виртуелно окружење ---
 .venv/
-.claude/settings.local.json
+venv/
+env/
+*.egg-info/
+build/
+dist/
+
+# --- Python међупроизводи ---
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+
+# --- тестови и алати за проверу ---
 .pytest_cache/
-.DS_Store
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.mypy_cache/
+.ruff_cache/
+.benchmarks/
+
+# --- Claude Code, локална подешавања ---
+# .claude/commands/ НАМЕРНО остаје у гиту — то су пројектне команде (/journal).
+.claude/settings.local.json
+.claude/*.local.json
+.claude/.credentials.json
+.claude/todos/
+.claude/shell-snapshots/
+.claude-trace/
+
+# --- уредници ---
+.vscode/
+.idea/
+*.swp
+
+# --- излази експеримената ---
 results/*
 !results/.gitkeep
-помоћни фајлови/*.pdf
-*.egg-info/
-_za_brisanje/
+
+# --- ОС ---
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# --- литература и стари материјал ---
+помоћни фајлови/
+*.pdf
