@@ -1,0 +1,47 @@
+"""Централизоване почетне вредности за калибрацију (BASELINE_SPEC §7).
+
+Све вредности су ПОЧЕТНЕ, не коначне — калибришу се емпиријски (README 4.2). Држане на
+једном месту да не буду расуте по модулима (BASELINE_SPEC §7).
+"""
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Config:
+    """Један комплет хиперпараметара за покретање (baseline или bilevel)."""
+
+    population_size: int = 100
+    total_budget: int = 50_000          # позива симулатора, идентично за оба метода
+
+    n_min: int = 4                       # доња граница броја чворова
+    n_max: int = 12                      # горња граница броја чворова
+    n_init_choices: tuple[int, ...] = (5, 6, 7, 8)   # почетно n, равномерно
+
+    p_topo: float = 0.30                 # вероватноћа тополошке мутације
+    p_coord: float = 0.70                # вероватноћа координатне мутације
+
+    p_add_node_a: float = 0.40           # избор оператора при тополошкој мутацији
+    p_add_node_b: float = 0.25
+    p_delete_node: float = 0.35
+
+    gene_wise_prob: float = 0.25         # координатна мутација — вероватноћа по чвору
+    k_start: float = 0.15                # скала координатне мутације — почетак
+    k_end: float = 0.02                  # скала координатне мутације — крај (експоненцијално)
+
+    alpha_min: float = 0.10              # add_node начин А (BASELINE_SPEC §4.1)
+    alpha_max: float = 0.40
+    rho_min: float = 0.7                 # add_node начин Б и иницијализација (§4.2, §8)
+    rho_max: float = 1.3
+
+    penalty: float = 1e9                 # казна за невалидну јединку
+    fitness_cap: float = 1e8             # одсецање валидног фитнеса
+
+    n_schedule: tuple[int, ...] = (90, 180, 360, 720)
+    plateau_window_grow: int = 15        # генерација, за напредовање N
+    plateau_eps_grow: float = 0.01       # релативно побољшање
+    plateau_window_stop: int = 30        # генерација, за заустављање на N=720
+    plateau_eps_stop: float = 0.001
+
+
+DEFAULT_CONFIG = Config()

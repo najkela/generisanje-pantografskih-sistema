@@ -79,3 +79,88 @@ def link_lengths(topology: Topology, coords: np.ndarray) -> dict[tuple[int, int]
         (i, j): float(np.linalg.norm(coords[i] - coords[j]))
         for i, j in topology.edges
     }
+
+
+@dataclass
+class SequenceGene:
+    """Ген једног корака секвенце склапања (README 1.2.1).
+
+    `a`, `b` су ПОЗИЦИЈЕ ослонаца у секвенци (не индекси чворова из оригиналног генома).
+    `rho_a`, `rho_b` су односи дужина полуга према размаку ослонаца у θ=0; важе искључиво
+    у том тренутку (README 1.2.1, упозорење) — једном фиксирани, симулација их не мења.
+    `s` бира грану circle-circle пресека (+1 или −1).
+    """
+
+    a: int
+    b: int
+    rho_a: float
+    rho_b: float
+    s: int
+
+
+@dataclass
+class Sequence:
+    """Канонски запис јединке: језгро у апсолутним координатама + гени корака (README 1.2.1)."""
+
+    core: np.ndarray  # облика (3, 2): q0(0), q0(1), q0(2), дословне координате
+    genes: list[SequenceGene]
+
+
+def to_sequence(topology: Topology, coords: np.ndarray) -> Sequence:
+    """Канонизује геном у секвенцу склапања преко BFS solving order-а (README 1.2.1).
+
+    Позиције `a`, `b` у сваком гену показују на место ослонца У СЕКВЕНЦИ — мапирање је
+    потребно јер BFS solving order не мора да поклопи нумеричке индексе чворова.
+    """
+    # Локални увоз: `validation` и `simulator` увозе из `genome`, циклични увоз на врху фајла.
+    from .simulator import circle_intersect_pair
+    from .validation import solving_order
+
+    order = solving_order(topology)
+
+    position_of = {FIXED_A: 0, FIXED_B: 1, CRANK: 2}
+    for offset, step in enumerate(order):
+        position_of[step.target] = offset + 3
+
+    genes: list[SequenceGene] = []
+    for step in order:
+        u = step.target
+        a_node, b_node = step.parents
+        pa, pb = coords[a_node], coords[b_node]
+        d = float(np.linalg.norm(pb - pa))
+        rho_a = float(np.linalg.norm(coords[u] - pa) / d)
+        rho_b = float(np.linalg.norm(coords[u] - pb) / d)
+        p_plus, p_minus = circle_intersect_pair(pa, pb, rho_a * d, rho_b * d)
+        s = 1 if np.linalg.norm(coords[u] - p_plus) <= np.linalg.norm(coords[u] - p_minus) else -1
+        genes.append(
+            SequenceGene(a=position_of[a_node], b=position_of[b_node], rho_a=rho_a, rho_b=rho_b, s=s)
+        )
+
+    return Sequence(core=coords[[FIXED_A, FIXED_B, CRANK]].copy(), genes=genes)
+
+
+def from_sequence(seq: Sequence) -> tuple[Topology, np.ndarray] | None:
+    """Реконструише топологију и координате у θ=0 из секвенце склапања (README 1.2.1, 2.2 корак 3).
+
+    Дужине кракова се фиксирају једном, из размака ослонаца у реконструисаној геометрији.
+    Враћа `None` ако у неком кораку circle-circle пресек не постоји (README 1.4).
+    """
+    from .simulator import circle_intersect_pair
+
+    n_nodes = 3 + len(seq.genes)
+    coords = np.zeros((n_nodes, 2))
+    coords[0:3] = seq.core
+    edges: list[tuple[int, int]] = [(FIXED_A, CRANK)]
+
+    for k, gene in enumerate(seq.genes, start=3):
+        pa, pb = coords[gene.a], coords[gene.b]
+        d = float(np.linalg.norm(pb - pa))
+        pair = circle_intersect_pair(pa, pb, gene.rho_a * d, gene.rho_b * d)
+        if pair is None:
+            return None
+        p_plus, p_minus = pair
+        coords[k] = p_plus if gene.s == 1 else p_minus
+        edges.append((gene.a, k))
+        edges.append((gene.b, k))
+
+    return Topology(n_nodes=n_nodes, edges=edges), coords
