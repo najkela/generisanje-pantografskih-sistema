@@ -1,10 +1,15 @@
-"""Провере ваљаности топологије и конструкција solving order-а (README 1.4).
+"""Провере ваљаности топологије и solving order преко инваријанте редоследа (README 1.4).
 
 Редослед провера је намерно јефтино → скупо: структурне провере, провера степена,
-провера ослонца crank-а, тек онда BFS конструкција solving order-а, па провера
-положаја tracer-a (провера 5, README 1.4, BASELINE_SPEC §2).
-DOF=1 се обезбеђује имплицитно кроз BFS, не рачунањем формуле — `degrees_of_freedom`
-је чиста дијагностика.
+провера ослонца crank-а, тек онда провера инваријанте редоследа, па провера положаја
+tracer-a (провера 5, README 1.4, BASELINE_SPEC §2).
+
+Инваријанта редоследа (измењено 31.08., DECISIONS §16): за сваки чвор `k ≥ 3`, скуп
+суседа мањег индекса мора имати тачно 2 елемента — то су ослонци чвора `k`. Solving
+order је тада тривијално `[3, ..., n-1]`, исти као редослед индекса — BFS претрага и
+tie-break из старије верзије су повучени као беспредметни (сваки оператор из 2.3 већ
+гради чворове тим редом). Провера остаје јер је `Topology` обичан скуп ивица који се
+склапа и ручно (тестови, `run.py demo`, сутра `bilevel.py`).
 """
 
 from dataclasses import dataclass
@@ -77,32 +82,54 @@ def check_crank_support(topology: Topology) -> None:
 
 
 def solving_order(topology: Topology) -> list[Step]:
-    """BFS конструкција solving order-а (README 1.4, корак 4; једнозначност — README 1.2.1).
+    """Solving order преко инваријанте редоследа (README 1.4 корак 4, 1.2.1; измењено 31.08.).
 
-    Креће од `known = {0, 1, 2}`; у сваком пролазу тражи чвор са *тачно 2 позната
-    суседа* и премешта га у `known` — детерминистички tie-break бира најмањи индекс
-    ако их има више. Ако пролаз не направи напредак, а нису сви чворови обиђени →
-    циклична зависност → невалидно.
+    За сваки чвор `k` од 3 до `n-1`: скуп суседа мањег индекса мора имати тачно 2
+    елемента — то су његови ослонци, читају се директно (`sorted(m for m in
+    neighbors(k) if m < k)`), без претраге. Мање од 2 → чвор неодређен; више → преодређен
+    → у оба случаја `InvalidTopology`. Резултујући редослед је увек `[3, ..., n-1]`.
     """
-    known = {FIXED_A, FIXED_B, CRANK}
-    remaining = set(range(topology.n_nodes)) - known
     order: list[Step] = []
-
-    while remaining:
-        candidates = sorted(
-            node for node in remaining if len(topology.neighbors(node) & known) == 2
-        )
-        if not candidates:
+    for k in range(3, topology.n_nodes):
+        parents = sorted(m for m in topology.neighbors(k) if m < k)
+        if len(parents) != 2:
             raise InvalidTopology(
-                "Циклична зависност — ниједан преостали чвор нема тачно 2 позната суседа."
+                f"Чвор {k} нема тачно 2 суседа мањег индекса (нађено {len(parents)})."
             )
-        node = candidates[0]
-        parents = tuple(sorted(topology.neighbors(node) & known))
-        order.append(Step(target=node, parents=parents))
-        known.add(node)
-        remaining.remove(node)
-
+        order.append(Step(target=k, parents=(parents[0], parents[1])))
     return order
+
+
+def check_fixed_b_ancestor(topology: Topology, order: list[Step]) -> None:
+    """Провера 6 (ново 01.09., docs/NALAZ_31_08.md НАЛАЗ 1): чвор 1 (FIXED_B) мора бити
+    предак трагача.
+
+    Ако чвор 1 нигде не учествује у предачком стаблу трагача, механизам има само један
+    ослонац (чвор 0) — круто тело које се врти око чвора 0 и по конструкцији описује
+    ТАЧНУ кружницу, не праву путању: за задат угао crank-а, сваки следећи предак се
+    одређује пресеком кругова фиксних полупречника око већ одређених чворова, па ротација
+    целог склопа за Δ чува сва растојања и даје конгруентну конфигурацију. Ово је хард
+    одбијање, не казна — кружна јединка није лоше решење него механизам који по
+    конструкцији не може ништа осим круга (апсорбујући локални оптимум, мерено НАЛАЗ 1).
+
+    Прима већ израчунат `order` из `validate()` — solving order се не рачуна двапут на
+    најтоплијој путањи (сваки позив `fitness.evaluate`).
+    """
+    parents_of = {step.target: step.parents for step in order}
+    stack = [tracer(topology.n_nodes)]
+    seen = set(stack)
+    while stack:
+        node = stack.pop()
+        if node == FIXED_B:
+            return
+        for parent in parents_of.get(node, ()):
+            if parent not in seen:
+                seen.add(parent)
+                stack.append(parent)
+    raise InvalidTopology(
+        "Чвор 1 (FIXED_B) није предак трагача — механизам има само један ослонац "
+        "(чвор 0) и по конструкцији описује кружницу, не праву путању."
+    )
 
 
 def validate(topology: Topology) -> list[Step]:
@@ -110,6 +137,9 @@ def validate(topology: Topology) -> list[Step]:
 
     Провера 5 (положај tracer-a, BASELINE_SPEC §2): solving order се мора завршавати
     чвором `n−1` — ниједан чвор не сме висити на tracer-у (README 1.3).
+
+    Провера 6 (`check_fixed_b_ancestor`, ново 01.09.): чвор 1 мора бити предак трагача,
+    иначе је механизам структурно осуђен на кружницу (docs/NALAZ_31_08.md НАЛАЗ 1).
     """
     check_structure(topology)
     check_degrees(topology)
@@ -117,6 +147,7 @@ def validate(topology: Topology) -> list[Step]:
     order = solving_order(topology)
     if not order or order[-1].target != tracer(topology.n_nodes):
         raise InvalidTopology("Tracer мора бити последњи решен чвор у solving order-у.")
+    check_fixed_b_ancestor(topology, order)
     return order
 
 

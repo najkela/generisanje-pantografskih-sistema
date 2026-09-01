@@ -91,7 +91,12 @@ def _average_link_length(topology: Topology, coords: np.ndarray) -> float:
 def _add_node_mode_a(
     topology: Topology, coords: np.ndarray, rng: np.random.Generator
 ) -> tuple[Topology, np.ndarray]:
-    """Начин А — допиши на крај; нови чвор постаје tracer (BASELINE_SPEC §4.1)."""
+    """Начин А — допиши на крај; нови чвор постаје tracer (BASELINE_SPEC §4.1).
+
+    Одржава инваријанту „чвор 1 је предак трагача" (docs/NALAZ_31_08.md НАЛАЗ 1, ново
+    01.09.): обавезан ослонац новог чвора је стари tracer, чије предачко стабло (ако је
+    улазни геном био валидан) већ садржи чвор 1 — нови tracer то наслеђује директно.
+    """
     n = topology.n_nodes
     old_tracer = tracer(n)
     other_positions = [node for node in range(n) if node != old_tracer]
@@ -113,7 +118,13 @@ def _add_node_mode_a(
 def _add_node_mode_b(
     topology: Topology, coords: np.ndarray, rng: np.random.Generator
 ) -> tuple[Topology, np.ndarray] | None:
-    """Начин Б — убаци непосредно пре tracer-a; неутрална мутација (BASELINE_SPEC §4.2)."""
+    """Начин Б — убаци непосредно пре tracer-a; неутрална мутација (BASELINE_SPEC §4.2).
+
+    Одржава инваријанту „чвор 1 је предак трагача" (docs/NALAZ_31_08.md НАЛАЗ 1, ново
+    01.09.): tracer остаје ИСТИ чвор — само му се индекс помера релабелингом (n−1 → n),
+    ослонци и ивице му се не дирају — предачко стабло је структурно идентично пре и после
+    потеза.
+    """
     n = topology.n_nodes
     old_tracer = tracer(n)
     candidates = list(range(old_tracer))  # позиције пре места убацивања
@@ -180,6 +191,12 @@ def delete_node(
     сви остали чворови задржавају позицију у θ=0 — мења се кретање, не почетни облик.
     Ако је обрисан последњи чвор, нови последњи аутоматски постаје tracer (README 1.3),
     јер тада нема зависника па реиндексирање само скраћује низ.
+
+    НЕ одржава инваријанту „чвор 1 је предак трагача" (docs/NALAZ_31_08.md НАЛАЗ 1, ново
+    01.09.): преспајање бира ЈЕДАН од два ослонца обрисаног чвора насумично — ако је чвор
+    1 био предак искључиво преко изгубљене гране, tracer остаје без њега. НЕ поправља се,
+    исти третман као circuit defect (BASELINE_SPEC §5, „без поправке") — таква јединка
+    постаје неважећа тек при `validate()` унутар `fitness.evaluate`, добија казну.
     """
     n = topology.n_nodes
     if n < 5:
@@ -254,3 +271,45 @@ def mutate_baseline(
     `_choose_topology_operator` из табеле 7. Не користити у новом коду.
     """
     raise NotImplementedError
+
+
+# --- мртав терет (закључано 30.08., README 2.3, BASELINE_SPEC §4.4) --------------
+
+
+def prune_dead_nodes(topology: Topology, coords: np.ndarray) -> tuple[Topology, np.ndarray]:
+    """Уклања чворове ван предачког стабла tracer-a (README 2.3, „Мртав терет").
+
+    Позива се САМО над коначним резултатом, за приказ и извештај — никад унутар петље
+    претраге (симулатор за фитнес већ решава само претке tracer-a преко `solving_order`,
+    мртве гране не коштају ништа у времену; ово је чисто козметичко скраћивање генома).
+
+    Језгро `{0,1,2}` се увек задржава експлицитно — crank-ова ивица (0,2) није „solving"
+    зависност (crank/fixed никад нису мете у `parents_of`), па је обилазак предака преко
+    tracer-a сам по себи не би нужно обухватио. Реиндексирање је преко `sorted(keep)`;
+    tracer увек испадне последњи јер је већ имао највећи индекс у целом геному (исто
+    запажање које чини проверу 5 сувишном, в. DECISIONS §16).
+    """
+    order = solving_order(topology)
+    parents_of = {step.target: step.parents for step in order}
+    t = tracer(topology.n_nodes)
+
+    keep = {FIXED_A, FIXED_B, CRANK, t}
+    stack = [t]
+    while stack:
+        node = stack.pop()
+        for parent in parents_of.get(node, ()):
+            if parent not in keep:
+                keep.add(parent)
+                stack.append(parent)
+
+    kept_sorted = sorted(keep)
+    old_to_new = {old: new for new, old in enumerate(kept_sorted)}
+
+    new_edges = [
+        (old_to_new[a], old_to_new[b])
+        for a, b in topology.edges
+        if a in keep and b in keep
+    ]
+    new_topology = Topology(n_nodes=len(kept_sorted), edges=new_edges)
+    new_coords = coords[kept_sorted]
+    return new_topology, new_coords

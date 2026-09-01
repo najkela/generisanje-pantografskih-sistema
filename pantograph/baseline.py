@@ -9,13 +9,32 @@ Baseline мора бити best-effort, не намерно ослабљен —
 Мутацији су подложне само новонастале јединке, не и пренета елита.
 """
 
+import dataclasses
+from typing import TYPE_CHECKING
+
 import numpy as np
 
 from .config import Config, DEFAULT_CONFIG
 from .curve import TargetCurve
+from .experiment import (
+    Budget,
+    RunLog,
+    curve_file_hash,
+    git_commit_hash,
+    plateau_detected,
+    resolution_schedule,
+    spawn_rng_streams,
+)
+from .fitness import PENALTY, evaluate
 from .genome import Genome, Sequence, from_sequence, to_sequence
-from .operators import add_node, delete_node, mutate_coords
+from .operators import add_node, delete_node, mutate_coords, prune_dead_nodes, random_initial_genome
 from .validation import InvalidTopology
+
+if TYPE_CHECKING:
+    # само за анотацију типа — `evolve` не сме да увезе `progress` на runtime нивоу
+    # (козметика 31.08.): алгоритамска путања baseline → experiment не сме да увуче
+    # matplotlib преко прогрес-репортера.
+    from .progress import ProgressReporter
 
 
 def _copy_genome(genome: Genome) -> Genome:
@@ -151,10 +170,9 @@ def evolve_generation(
     новонасталим јединкама (README 2.2, BASELINE_SPEC §6). `scores[i]` мора одговарати
     `population[i]` (мање је боље — Chamfer растојање).
 
-    Ово је НАМЕРНО ужа функција од старог потписа `evolve(target, budget, seed,
-    population_size)` (застарео скелет, остаје нетакнут) — четири RNG тока, распоред N,
-    плато-детекција и логовање су ван обима 3.3, припадају `experiment.py` (корак 4.1,
-    в. BASELINE_SPEC §10 табела).
+    Ово је НАМЕРНО ужа функција од `evolve` — четири RNG тока, распоред N, плато-детекција
+    и логовање су ван обима 3.3, припадају заједничкој инфраструктури у `experiment.py`
+    (корак 4.1); `evolve` их користи и позива ову функцију сваку генерацију.
     """
     p = len(population)
     ranked = select(population, scores)
@@ -183,9 +201,122 @@ def evolve_generation(
     return next_generation
 
 
-def evolve(target: TargetCurve, budget, seed: int, population_size: int):
-    """Застарео потпис — четири RNG тока, распоред N, плато-детекција и логовање
-    (BASELINE_SPEC §9, §10 корак 4.1) припадају `experiment.py`, не овом модулу. Замењено
-    са `evolve_generation` (30.08.) + спољашња петља у `experiment.py`. Не користити.
+def initialize_population(config: Config, rng_init: np.random.Generator) -> list[Genome]:
+    """Почетна популација (README 4.1, BASELINE_SPEC §8) — `n` равномерно из
+    `config.n_init_choices`, понавља `random_initial_genome` до валидне (§8: чвор 1 се
+    бира случајно као ослонац па повремено остане изолован — то се третира као невалидна
+    иницијализација, исто као невалидна мутација, БЕЗ посебне логике овде).
     """
-    raise NotImplementedError
+    population = []
+    for _ in range(config.population_size):
+        result = None
+        while result is None:
+            n_nodes = int(rng_init.choice(config.n_init_choices))
+            result = random_initial_genome(n_nodes, rng_init)
+        topology, coords = result
+        population.append(Genome(topology=topology, coords=coords))
+    return population
+
+
+def evolve(
+    target: TargetCurve,
+    budget: int,
+    seed: int,
+    population_size: int,
+    config: Config = DEFAULT_CONFIG,
+    reporter: "ProgressReporter | None" = None,
+) -> RunLog:
+    """Главна петља baseline ГА (README 3.3, BASELINE_SPEC §9, §10 корак 4.1).
+
+    Троши буџет по 1 позиву симулатора по јединки **по генерацији** — цела популација се
+    изнова оцењује сваке генерације, намерно БЕЗ кеширања елите: кеш би морао да се
+    поништи чим `resolution_schedule` подигне `N`, а Chamfer рачунат на различитим `N`
+    вредностима није упоредив. Пуна поновна процена је једноставнија и тачна прва верзија
+    (план 31.08.); оптимизација остаје отворена за касније.
+
+    RNG токови (BASELINE_SPEC §9): `rng_init` само за `initialize_population`; `rng_select`,
+    `rng_cross`, `rng_mut` се преносе НЕПРОМЕЊЕНИ (исти објекти, стање им расте) кроз све
+    генерације у `evolve_generation`.
+
+    `reporter` је опциони чист посматрач (`progress.ProgressReporter`, козметика 31.08.)
+    — прима готов `GenerationRecord` и тренутно најбољи геном, ништа не мења у току
+    петље. `start()`/`finish()` зове позивалац (`run.py`), не `evolve`.
+
+    Критеријум заустављања на largest `N` (исправљено 01.09., docs/NALAZ_31_08.md
+    НАЛАЗ 2): плато се мери ИСКЉУЧИВО над `history` од уласка у `n_schedule[-1]`
+    (`max_n_start`), не над целом историјом — иначе прозор пуца одмах, пун старих уноса
+    са нижих `N` где Chamfer није упоредива вредност (исти разлог због ког
+    `progress.ProgressReporter` ресетује бројач стагнације на промени `N`).
+    """
+    run_config = dataclasses.replace(config, population_size=population_size, total_budget=budget)
+    rng_init, rng_select, rng_cross, rng_mut = spawn_rng_streams(seed)
+    budget_tracker = Budget(max_calls=budget)
+
+    log = RunLog(
+        method="baseline",
+        curve=target.path or "",
+        curve_hash=curve_file_hash(target.path) if target.path else "",
+        seed=seed,
+        git_commit=git_commit_hash(),
+        config=dataclasses.asdict(run_config),
+    )
+
+    population = initialize_population(run_config, rng_init)
+    history: list[float] = []
+    best_score_so_far = float("inf")
+    generation = 0
+    # Индекс у `history` од ког важи плато на највећем N (docs/NALAZ_31_08.md НАЛАЗ 2):
+    # без овога критеријум заустављања мери плато преко уноса са нижих N, где је крива
+    # (рачуната на другачијем N, неупоредива вредност) одавно легла — прозор пуца одмах.
+    max_n_start: int | None = None
+
+    while True:
+        n_curve = resolution_schedule(generation, history, run_config)
+        if max_n_start is None and n_curve == run_config.n_schedule[-1]:
+            max_n_start = len(history)
+        scores = np.array(
+            [evaluate(g, target, n_curve, counter=budget_tracker.counter) for g in population]
+        )
+        best_index = int(np.argmin(scores))
+        best_score = float(scores[best_index])
+
+        if best_score < best_score_so_far:
+            best_score_so_far = best_score
+            log.best_genome = _copy_genome(population[best_index])
+
+        invalid_count = int((scores >= PENALTY).sum())
+        try:
+            working_topology, _ = prune_dead_nodes(
+                population[best_index].topology, population[best_index].coords
+            )
+            working_nodes = working_topology.n_nodes
+        except InvalidTopology:
+            working_nodes = 0  # одбрамбено — не треба да се деси за валидну јединку
+        record = log.record(
+            generation=generation,
+            calls_spent=budget_tracker.spent,
+            best_fitness=best_score,
+            mean_fitness=float(scores.mean()),
+            n_curve=n_curve,
+            best_n_nodes=population[best_index].topology.n_nodes,
+            best_so_far=best_score_so_far,
+            invalid_count=invalid_count,
+            working_nodes=working_nodes,
+        )
+        if reporter is not None:
+            reporter.update(record, log.best_genome)
+        history.append(best_score)
+
+        if budget_tracker.exhausted:
+            break
+        if n_curve == run_config.n_schedule[-1] and plateau_detected(
+            history[max_n_start:], run_config.plateau_window_stop, run_config.plateau_eps_stop
+        ):
+            break
+
+        fraction = min(budget_tracker.spent / run_config.total_budget, 1.0)
+        k = run_config.k_start * (run_config.k_end / run_config.k_start) ** fraction
+        population = evolve_generation(population, scores, rng_select, rng_cross, rng_mut, k, run_config)
+        generation += 1
+
+    return log

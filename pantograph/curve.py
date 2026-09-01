@@ -48,13 +48,19 @@ def resample(points: np.ndarray, n: int) -> np.ndarray:
 
 @dataclass
 class TargetCurve:
-    """Нормализована циљна крива са унапред изграђеним KD-дрветом (README 1.6)."""
+    """Нормализована циљна крива са унапред изграђеним KD-дрветом (README 1.6).
+
+    `path` је опционо (30.08.) — попуњава га само `from_file`, потребно логовању
+    (`experiment.curve_file_hash`, `RunLog.curve`); ручна конструкција (тестови) га
+    оставља на `None`.
+    """
 
     points: np.ndarray
     tree: cKDTree
+    path: str | None = None
 
     @classmethod
     def from_file(cls, path: str) -> "TargetCurve":
         """Учитај → нормализуј → изгради KD-дрво (једном, за цео ток оптимизације)."""
         points = normalize(load(path))
-        return cls(points=points, tree=cKDTree(points))
+        return cls(points=points, tree=cKDTree(points), path=path)

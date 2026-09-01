@@ -1,10 +1,11 @@
-"""Спецификација baseline ГА: select, crossover, mutate, evolve_generation (README 2.2,
-BASELINE_SPEC §5, §6)."""
+"""Спецификација baseline ГА: select, crossover, mutate, evolve_generation, evolve
+(README 2.2, BASELINE_SPEC §5, §6, §9)."""
 
 import numpy as np
 
-from pantograph.baseline import crossover, evolve_generation, mutate, select
+from pantograph.baseline import crossover, evolve, evolve_generation, mutate, select
 from pantograph.config import DEFAULT_CONFIG
+from pantograph.curve import TargetCurve
 from pantograph.genome import Genome, Topology
 from pantograph.operators import random_initial_genome
 from pantograph.validation import degrees_of_freedom, validate
@@ -125,3 +126,20 @@ def test_evolve_generation_elite_survives_unchanged():
     assert next_generation[0].topology.edges == best.topology.edges
     assert np.allclose(next_generation[0].coords, best.coords)
     validate(next_generation[0].topology)  # елита остаје валидна
+
+
+def test_evolve_runs_to_budget_and_returns_run_log(circle):
+    """Интеграциони тест малог обима: цела петља (README 3.3, BASELINE_SPEC §9) — заврши,
+    троши тачно буџет, RunLog садржи записе, коначна грешка коначан број."""
+    from scipy.spatial import cKDTree
+
+    target = TargetCurve(points=circle, tree=cKDTree(circle))
+    log = evolve(target, budget=200, seed=1, population_size=10)
+
+    assert log.method == "baseline"
+    assert log.seed == 1
+    assert len(log.records) > 0
+    assert log.records[-1].calls_spent == 200  # тачно потрошен буџет (10 по генерацији)
+    assert np.isfinite(log.final_error)
+    assert log.best_genome is not None
+    assert log.error_curve == [(r.calls_spent, r.best_fitness) for r in log.records]

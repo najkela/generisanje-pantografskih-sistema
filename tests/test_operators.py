@@ -3,7 +3,7 @@
 import numpy as np
 
 from pantograph.genome import Topology, role
-from pantograph.operators import add_node, delete_node, random_initial_genome
+from pantograph.operators import add_node, delete_node, prune_dead_nodes, random_initial_genome
 from pantograph.validation import degrees_of_freedom, validate
 
 
@@ -116,3 +116,32 @@ def test_random_initial_genome_none_on_isolated_fixed_node():
     третира се као невалидна иницијализација, не као бага у конструкцији."""
     rng = np.random.default_rng(6)  # ово конкретно семе даје изолован чвор 1 за n=6
     assert random_initial_genome(6, rng) is None
+
+
+def test_prune_dead_nodes_removes_unused_branch(fourbar):
+    """Мртав терет (начин Б) нестаје; предачко стабло tracer-a (§, „Мртав терет") остаје
+    нетакнуто — исте координате, иста улога, DOF инваријанта и даље важи."""
+    coords = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    rng = np.random.default_rng(0)
+    with_dead_weight, coords_with_dead_weight = add_node(fourbar, coords, rng, mode="B")
+    # начин Б помера стари tracer на нову последњу позицију (BASELINE_SPEC §4.2) —
+    # координате читамо ОТУДА, не са старог индекса (сад заузетог мртвим чвором).
+    old_tracer_coords = coords_with_dead_weight[with_dead_weight.n_nodes - 1].copy()
+
+    pruned_topology, pruned_coords = prune_dead_nodes(with_dead_weight, coords_with_dead_weight)
+
+    assert pruned_topology.n_nodes == fourbar.n_nodes  # мртви чвор нестао
+    assert degrees_of_freedom(pruned_topology) == 1
+    validate(pruned_topology)
+    new_tracer = pruned_topology.n_nodes - 1
+    assert role(new_tracer, pruned_topology.n_nodes) == "трагач"
+    assert np.allclose(pruned_coords[new_tracer], old_tracer_coords)
+
+
+def test_prune_dead_nodes_is_idempotent(fourbar):
+    """Прунинг генома без мртвог терета не мења ништа."""
+    coords = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    pruned_topology, pruned_coords = prune_dead_nodes(fourbar, coords)
+    assert pruned_topology.edges == fourbar.edges
+    assert pruned_topology.n_nodes == fourbar.n_nodes
+    assert np.allclose(pruned_coords, coords)
