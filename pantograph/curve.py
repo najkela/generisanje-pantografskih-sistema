@@ -1,6 +1,6 @@
 """Учитавање, нормализација и подузорковање циљне криве (README 1.1, 1.5)."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -11,20 +11,46 @@ def load(path: str) -> np.ndarray:
     return np.loadtxt(path, delimiter=",", dtype=float).reshape(-1, 2)
 
 
-def normalize(points: np.ndarray) -> np.ndarray:
-    """Центар bounding box-a → (0,0); скалирање тако да највеће растојање од центра буде 1.
+def center_and_radius(points: np.ndarray) -> tuple[np.ndarray, float]:
+    """Центар bounding box-a и највеће растојање тачке од центра (README 1.5).
 
-    Нормализује се *само циљна крива*, једном при учитавању (README 1.5).
-    Центар bounding box-a, не центроид — независан од густине узорковања.
-    Највеће растојање, не површина bounding box-a — површина лажно изједначава
-    криве различитог облика.
+    Дељено између `normalize` и `fitness.evaluate` (DECISIONS §17), да се bbox и норма не
+    рачунају двапут у најврелијој петљи (50 000 позива симулатора по покретању): `evaluate`
+    треба радијус ПРЕ дељења (заштита од дегенерисане путање), `normalize` исти радијус КАО
+    делилац — иста формула, рачуната једном.
     """
     bbox_min = points.min(axis=0)
     bbox_max = points.max(axis=0)
     center = (bbox_min + bbox_max) / 2.0
-    centered = points - center
-    scale = np.linalg.norm(centered, axis=1).max()
-    return centered / scale
+    radius = np.linalg.norm(points - center, axis=1).max()
+    return center, radius
+
+
+def normalize(points: np.ndarray) -> np.ndarray:
+    """Центар bounding box-a → (0,0); скалирање тако да највеће растојање од центра буде 1.
+
+    Нормализује се циљна крива једном при учитавању, и генерисана путања при свакој
+    евалуацији истом функцијом (README 1.5, DECISIONS §17). Центар bounding box-a, не
+    центроид — независан од густине узорковања. Највеће растојање, не површина bounding
+    box-a — површина лажно изједначава криве различитог облика.
+    """
+    center, scale = center_and_radius(points)
+    return (points - center) / scale
+
+
+def apply_similarity_transform(
+    points: np.ndarray, tx: float, ty: float, angle: float, scale: float
+) -> np.ndarray:
+    """Транслација + ротација + униформна скала над скупом тачака (README 1.5, DECISIONS §17).
+
+    Користи се и за путању и за координате генома — сличносна трансформација координата даје
+    идентично трансформисану путању (провера: `tests/test_curve.py`), па се примењује на
+    `Genome.coords` на крају покретања да снимљени механизам стварно исцртава циљну криву на
+    њеном месту и у њеној величини.
+    """
+    c, s = np.cos(angle), np.sin(angle)
+    rotation = np.array([[c, -s], [s, c]])
+    return (points @ rotation.T) * scale + np.array([tx, ty])
 
 
 def resample(points: np.ndarray, n: int) -> np.ndarray:
@@ -58,9 +84,20 @@ class TargetCurve:
     points: np.ndarray
     tree: cKDTree
     path: str | None = None
+    _resolution_cache: dict[int, "TargetCurve"] = field(default_factory=dict, repr=False, compare=False)
 
     @classmethod
     def from_file(cls, path: str) -> "TargetCurve":
         """Учитај → нормализуј → изгради KD-дрво (једном, за цео ток оптимизације)."""
         points = normalize(load(path))
         return cls(points=points, tree=cKDTree(points), path=path)
+
+    def at_resolution(self, n: int) -> "TargetCurve":
+        """Циљна крива подузоркована на `n` тачака, исте густине као путања за дато N
+        (README 1.6, DECISIONS §17). KD-дрво се гради само при ПРВОМ позиву за то `n`,
+        кеширано по `n` — иначе би се градило по свакој евалуацији (најврелија петља).
+        """
+        if n not in self._resolution_cache:
+            resampled = resample(self.points, n)
+            self._resolution_cache[n] = TargetCurve(points=resampled, tree=cKDTree(resampled), path=self.path)
+        return self._resolution_cache[n]

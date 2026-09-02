@@ -59,11 +59,25 @@ def circle_intersect_pair(
     return midpoint + h * perp, midpoint - h * perp, h
 
 
-def _closer_branch(p_plus: np.ndarray, p_minus: np.ndarray, previous: np.ndarray) -> np.ndarray:
-    """Бира грану circle-circle пресека ближу претходном положају чвора."""
-    d_plus = np.linalg.norm(p_plus - previous)
-    d_minus = np.linalg.norm(p_minus - previous)
-    return p_plus if d_plus <= d_minus else p_minus
+def branch_signs(topology: Topology, coords: np.ndarray, order: list[Step]) -> dict[int, int]:
+    """Знак гране circle-circle пресека сваког чвора, рачунат једном из θ=0 геометрије
+    (README 4.4, DECISIONS §17) — својство склопа, не историје кретања.
+
+    За чвор `u` са ослонцима `(a,b)`: `s=+1` ако `u` лежи са стране усмерене праве `a→b`
+    одређене ротацијом вектора `(b-a)` за +90° (иста конвенција као `circle_intersect_pair`:
+    `perp = [-u[1], u[0]]`, `p_plus = midpoint + h*perp`), иначе `s=-1`. Ово даје исте
+    знакове као `genome.to_sequence` (тест: test_branch_signs_matches_to_sequence_signs) —
+    обе функције кодирају исту грану, само различитим формулама (поређење растојања наспрам
+    знака векторског производа).
+    """
+    signs: dict[int, int] = {}
+    for step in order:
+        u = step.target
+        a, b = step.parents
+        v = coords[b] - coords[a]
+        cross = v[0] * (coords[u][1] - coords[a][1]) - v[1] * (coords[u][0] - coords[a][0])
+        signs[u] = 1 if cross >= 0 else -1
+    return signs
 
 
 def circle_intersect(
@@ -71,10 +85,10 @@ def circle_intersect(
     p2: np.ndarray,
     r1: float,
     r2: float,
-    previous: np.ndarray,
+    sign: int,
     min_sin_angle: float,
 ) -> np.ndarray | None:
-    """Пресек два круга; бира грану ближу претходној позицији чвора.
+    """Пресек два круга; бира грану закуцану знаком `sign` (README 4.4, DECISIONS §17).
 
     Враћа `None` ако пресека нема (d > r1+r2 или d < |r1−r2|) — то је невалидна
     геометрија у том тренутку, коју фитнес претвара у коначну казну (README 1.6).
@@ -86,8 +100,11 @@ def circle_intersect(
     јефтино прво, скупо после, исти принцип као валидација топологије. `min_sin_angle` је
     `sin(radians(праг))` већ израчунат једном у `simulate`, не по позиву.
 
-    Хеуристика избора гране је и даље извор circuit defect проблема (README 4.4,
-    отворено 4.1) — ово НИЈЕ та провера (не детектује скок између грана), не мешати их.
+    Раније коришћена хеуристика "грана ближа претходном положају" (`_closer_branch`,
+    уклоњена 02.09.) је била извор circuit defect проблема (README 4.4, DECISIONS §17) —
+    повремено скаче на другу грану без детекције (docs/NALAZ_01_09_poza.md §2). `sign` је
+    закуцан из θ=0 геометрије (`branch_signs`) и исти важи на сваком углу, па је прескок
+    структурно немогућ.
     """
     pair = circle_intersect_pair(p1, p2, r1, r2)
     if pair is None:
@@ -97,26 +114,31 @@ def circle_intersect(
     sin_angle = (d * h) / (r1 * r2)
     if sin_angle < min_sin_angle:
         return None
-    return _closer_branch(p_plus, p_minus, previous)
+    return p_plus if sign > 0 else p_minus
 
 
 def positions_at(
     topology: Topology,
     lengths: dict[tuple[int, int], float],
-    previous: np.ndarray,
+    base: np.ndarray,
     order: list[Step],
     angle: float,
+    signs: dict[int, int],
     min_sin_angle: float,
 ) -> np.ndarray | None:
     """Позиције свих чворова за дати угао crank-а; `None` ако пресек не постоји или је
     угао преноса неког чвора испод прага (README 1.4, docs/NALAZ_01_09_ugao_prenosa.md).
 
-    Fixed чворови (0,1) се преузимају непромењени из `previous`. Crank(2) се поставља
-    директно на растојању `l(0,2)` под апсолутним углом `angle` (нема drift-а — не рачуна
-    се инкрементално). Остали чворови се решавају редом из `order` (README 1.2), бирајући
-    грану ближу претходном положају истог чвора (`circle_intersect`).
+    Конфигурација на углу θ зависи ИСКЉУЧИВО од θ и вектора знакова `signs` — без икакве
+    зависности од историје (претходног угла или претходног позива), DECISIONS §17. `base`
+    даје θ=0 геометрију фиксних чворова (0,1) — увек иста, никад резултат претходног позива.
+    Crank(2) се поставља апсолутно на растојању `l(0,2)` под углом `angle` (нема drift-а).
+    Остали чворови се решавају редом из `order` (README 1.2), свако бирајући своју грану из
+    `signs[u]`, никад из близине претходне позиције — то је поента ове измене: раније
+    коришћена хеуристика "грана ближа претходном положају" повремено прескаче на другу грану
+    без детекције (docs/NALAZ_01_09_poza.md §2), што закуцана грана структурно искључује.
     """
-    positions = previous.copy()
+    positions = base.copy()
     r02 = _link_length(lengths, FIXED_A, CRANK)
     positions[CRANK] = positions[FIXED_A] + r02 * np.array([np.cos(angle), np.sin(angle)])
 
@@ -125,7 +147,7 @@ def positions_at(
         a, b = step.parents
         ra = _link_length(lengths, a, u)
         rb = _link_length(lengths, b, u)
-        point = circle_intersect(positions[a], positions[b], ra, rb, previous[u], min_sin_angle)
+        point = circle_intersect(positions[a], positions[b], ra, rb, signs[u], min_sin_angle)
         if point is None:
             return None
         positions[u] = point
@@ -157,11 +179,11 @@ def simulate(
     tracer_index = tracer(topology.n_nodes)
     theta0 = float(np.arctan2(*(coords[CRANK] - coords[FIXED_A])[::-1]))
     min_sin_angle = float(np.sin(np.radians(config.min_transmission_angle_deg)))
+    signs = branch_signs(topology, coords, order)
 
-    positions = coords.copy()
     path = np.zeros((n, 2))
     for i, phi in enumerate(np.linspace(0.0, 2 * np.pi, n, endpoint=False)):
-        positions = positions_at(topology, lengths, positions, order, theta0 + phi, min_sin_angle)
+        positions = positions_at(topology, lengths, coords, order, theta0 + phi, signs, min_sin_angle)
         if positions is None:
             return None
         path[i] = positions[tracer_index]
@@ -172,16 +194,19 @@ def simulate(
 def positions_and_angle_at(
     topology: Topology,
     lengths: dict[tuple[int, int], float],
-    previous: np.ndarray,
+    base: np.ndarray,
     order: list[Step],
     angle: float,
+    signs: dict[int, int],
 ) -> tuple[np.ndarray, float] | None:
     """Као `positions_at`, БЕЗ прага, уз минимални `sin(угла преноса)` овог тренутка —
     чиста дијагностика (docs/NALAZ_01_09_ugao_prenosa.md, задатак 3): не позива се из
     `simulate`/`fitness.evaluate`, само из health-извештавања о најбољој јединки, да
-    `positions_at` остане неоптерећена додатним рачунањем у hot петљи.
+    `positions_at` остане неоптерећена додатним рачунањем у hot петљи. Мора мерити исти
+    механизам као `simulate` (DECISIONS §17), па узима исти закуцани `signs` уместо
+    хеуристике по близини.
     """
-    positions = previous.copy()
+    positions = base.copy()
     r02 = _link_length(lengths, FIXED_A, CRANK)
     positions[CRANK] = positions[FIXED_A] + r02 * np.array([np.cos(angle), np.sin(angle)])
 
@@ -198,7 +223,7 @@ def positions_and_angle_at(
         d = float(np.linalg.norm(positions[b] - positions[a]))
         sin_angle = (d * h) / (ra * rb)
         min_sin_angle = min(min_sin_angle, sin_angle)
-        positions[u] = _closer_branch(p_plus, p_minus, previous[u])
+        positions[u] = p_plus if signs[u] > 0 else p_minus
 
     return positions, min_sin_angle
 
@@ -217,12 +242,12 @@ def simulate_with_transmission_angle(
     lengths = link_lengths(topology, coords)
     tracer_index = tracer(topology.n_nodes)
     theta0 = float(np.arctan2(*(coords[CRANK] - coords[FIXED_A])[::-1]))
+    signs = branch_signs(topology, coords, order)
 
-    positions = coords.copy()
     path = np.zeros((n, 2))
     min_sin_angle = 1.0
     for i, phi in enumerate(np.linspace(0.0, 2 * np.pi, n, endpoint=False)):
-        result = positions_and_angle_at(topology, lengths, positions, order, theta0 + phi)
+        result = positions_and_angle_at(topology, lengths, coords, order, theta0 + phi, signs)
         if result is None:
             return None
         positions, step_min_sin = result

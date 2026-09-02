@@ -19,14 +19,14 @@ import numpy as np
 
 from pantograph.baseline import evolve
 from pantograph.config import DEFAULT_CONFIG, QUICK_CONFIG
-from pantograph.curve import TargetCurve
+from pantograph.curve import TargetCurve, apply_similarity_transform
 from pantograph.experiment import (
     RunLog,
     _genome_to_dict,
     curve_file_hash,
     git_commit_hash,
 )
-from pantograph.fitness import chamfer
+from pantograph.fitness import chamfer, fit_similarity_transform
 from pantograph.genome import Genome, Topology
 from pantograph.progress import ProgressReporter
 from pantograph.simulator import simulate
@@ -141,13 +141,31 @@ def run_experiment(args: argparse.Namespace) -> None:
         reporter=reporter,
     )
 
+    # Сличносна трансформација (README 1.5, DECISIONS §17) — ОДМАХ после `evolve`, ПРЕ
+    # репортера: `reporter.final_snapshot`/`finish` и снимци читају `log.best_genome`, па
+    # трансформација мора да им претходи да завршни снимак и резиме описују исти
+    # (трансформисани) механизам као `best_genome.json`/`mechanism.png`/`best_path.png`.
+    # Ван буџета, једном по покретању.
+    pose = None
+    if log.best_genome is not None:
+        best_path = tracer_path(log.best_genome, n=720)
+        if best_path is not None:
+            tx, ty, angle, scale = fit_similarity_transform(best_path, target.at_resolution(720))
+            log.best_genome.coords = apply_similarity_transform(
+                log.best_genome.coords, tx, ty, angle, scale
+            )
+            pose = {"tx": tx, "ty": ty, "angle_rad": angle, "scale": scale}
+
     reporter.final_snapshot(log)
     reporter.finish(log)
 
     log.save(os.path.join(run_dir, "log.json"))
     if log.best_genome is not None:
+        genome_dict = _genome_to_dict(log.best_genome)
+        if pose is not None:
+            genome_dict["pose"] = pose
         with open(os.path.join(run_dir, "best_genome.json"), "w", encoding="utf-8") as f:
-            json.dump(_genome_to_dict(log.best_genome), f, ensure_ascii=False, indent=2)
+            json.dump(genome_dict, f, ensure_ascii=False, indent=2)
 
     plot_error_curve(
         [log], title=f"{log.method}, seed={log.seed}",

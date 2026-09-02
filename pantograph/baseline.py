@@ -26,7 +26,7 @@ from .experiment import (
     spawn_rng_streams,
 )
 from .fitness import PENALTY, evaluate
-from .genome import Genome, Sequence, from_sequence, to_sequence
+from .genome import Genome, Sequence, from_sequence, link_lengths, to_sequence
 from .operators import add_node, delete_node, mutate_coords, prune_dead_nodes, random_initial_genome
 from .simulator import path_health, simulate_with_transmission_angle
 from .validation import InvalidTopology, validate
@@ -166,7 +166,7 @@ def evolve_generation(
     rng_mut: np.random.Generator,
     k: float,
     config: Config = DEFAULT_CONFIG,
-) -> list[Genome]:
+) -> tuple[list[Genome], list[float | None]]:
     """Једна генерација: 20% елита непромењено + 30/30/20 укрштање, мутација само на
     новонасталим јединкама (README 2.2, BASELINE_SPEC §6). `scores[i]` мора одговарати
     `population[i]` (мање је боље — Chamfer растојање).
@@ -174,9 +174,17 @@ def evolve_generation(
     Ово је НАМЕРНО ужа функција од `evolve` — четири RNG тока, распоред N, плато-детекција
     и логовање су ван обима 3.3, припадају заједничкој инфраструктури у `experiment.py`
     (корак 4.1); `evolve` их користи и позива ову функцију сваку генерацију.
+
+    Враћа и листу познатих оцена, паралелну повратној популацији (DECISIONS §17, кеш елите):
+    оцена родитеља за елитне позиције (непромењене, оцена им остаје тачна), `None` за
+    позиције насталe укрштањем и мутацијом. `evolve` ову листу користи да прескочи поновну
+    евалуацију елите АКО се `N` није променило од претходне генерације.
     """
     p = len(population)
     ranked = select(population, scores)
+    # Сортирана вредност на позицији i је иста без обзира на tie-break међу равним оценама
+    # (казна 1e9 је честа) — `ranked_scores[i]` тачно одговара оцени `ranked[i]`.
+    ranked_scores = np.sort(scores)
 
     n_elite = round(p * 0.20)
     n_upper_upper = round(p * 0.30)
@@ -187,6 +195,7 @@ def evolve_generation(
     middle_pool = ranked[n_elite : round(p * 0.80)]
 
     next_generation = [_copy_genome(g) for g in ranked[:n_elite]]
+    known_scores: list[float | None] = list(ranked_scores[:n_elite])
 
     offspring_specs = (
         (n_upper_upper, upper_pool, upper_pool),
@@ -198,8 +207,9 @@ def evolve_generation(
             child = _crossover_child(pool_a, pool_b, rng_select, rng_cross)
             mutated = mutate(child, config.p_topo, config.p_coord, k, rng_mut, config)
             next_generation.append(mutated if mutated is not None else child)
+            known_scores.append(None)
 
-    return next_generation
+    return next_generation, known_scores
 
 
 def initialize_population(config: Config, rng_init: np.random.Generator) -> list[Genome]:
@@ -229,11 +239,14 @@ def evolve(
 ) -> RunLog:
     """Главна петља baseline ГА (README 3.3, BASELINE_SPEC §9, §10 корак 4.1).
 
-    Троши буџет по 1 позиву симулатора по јединки **по генерацији** — цела популација се
-    изнова оцењује сваке генерације, намерно БЕЗ кеширања елите: кеш би морао да се
-    поништи чим `resolution_schedule` подигне `N`, а Chamfer рачунат на различитим `N`
-    вредностима није упоредив. Пуна поновна процена је једноставнија и тачна прва верзија
-    (план 31.08.); оптимизација остаје отворена за касније.
+    Троши буџет по 1 позиву симулатора по НОВОЈ јединки по генерацији — елита (горњих 20%)
+    која се преноси непромењена не кошта поновну евалуацију АКО се `N` није променило од
+    претходне генерације (DECISIONS §17): Chamfer рачунат на различитим `N` вредностима
+    није упоредив, па се кеш поништава на свакој промени `N` (`resolution_schedule` подигне
+    ниво) и цела популација, укључујући елиту, оцењује изнова. Ово је управо разлог који је
+    раније (31.08.) био наведен ПРОТИВ кеширања — сада је решен инвалидацијом кеша на промену
+    N, не занемарен. Мерено: 19.9% буџета уштеђено у покретању од 500 генерација
+    (docs/NALAZ_01_09_poza.md §6).
 
     RNG токови (BASELINE_SPEC §9): `rng_init` само за `initialize_population`; `rng_select`,
     `rng_cross`, `rng_mut` се преносе НЕПРОМЕЊЕНИ (исти објекти, стање им расте) кроз све
@@ -270,14 +283,25 @@ def evolve(
     # без овога критеријум заустављања мери плато преко уноса са нижих N, где је крива
     # (рачуната на другачијем N, неупоредива вредност) одавно легла — прозор пуца одмах.
     max_n_start: int | None = None
+    # Кеш оцене елите унутар истог N (DECISIONS §17) — `known_scores[i]` је позната оцена
+    # `population[i]` (елита пренета непромењена из претходне генерације) или `None`
+    # (настало укрштањем/мутацијом, мора се оценити). Поништава се на сваку промену N.
+    known_scores: list[float | None] | None = None
+    previous_n_curve: int | None = None
 
     while True:
         n_curve = resolution_schedule(generation, history, run_config)
         if max_n_start is None and n_curve == run_config.n_schedule[-1]:
             max_n_start = len(history)
-        scores = np.array(
-            [evaluate(g, target, n_curve, counter=budget_tracker.counter) for g in population]
-        )
+        if n_curve != previous_n_curve:
+            known_scores = None  # промена N → Chamfer није упоредив, цео кеш пада
+        scores = np.empty(len(population))
+        for i, g in enumerate(population):
+            if known_scores is not None and known_scores[i] is not None:
+                scores[i] = known_scores[i]
+            else:
+                scores[i] = evaluate(g, target, n_curve, counter=budget_tracker.counter)
+        previous_n_curve = n_curve
         best_index = int(np.argmin(scores))
         best_score = float(scores[best_index])
 
@@ -305,8 +329,16 @@ def evolve(
         if diag is not None:
             best_path, min_angle_deg = diag
             jump_count, loop_closure = path_health(best_path)
+            # Гломазност (DECISIONS §17) — највећа полуга / полупречник путање најбоље
+            # јединке. Ван буџета, чист дијагностички рачун над већ израчунатим `best_path`;
+            # НЕ улази у оцену (Chamfer остаје једина мера квалитета поклапања).
+            largest_link = max(link_lengths(best_genome.topology, best_genome.coords).values())
+            path_bbox_center = (best_path.min(axis=0) + best_path.max(axis=0)) / 2.0
+            path_radius = np.linalg.norm(best_path - path_bbox_center, axis=1).max()
+            link_to_radius_ratio = largest_link / path_radius if path_radius > 0 else float("nan")
         else:
             min_angle_deg, jump_count, loop_closure = float("nan"), 0, float("nan")
+            link_to_radius_ratio = float("nan")
 
         record = log.record(
             generation=generation,
@@ -321,6 +353,7 @@ def evolve(
             min_transmission_angle_deg=min_angle_deg,
             path_jump_count=jump_count,
             path_loop_closure=loop_closure,
+            link_to_radius_ratio=link_to_radius_ratio,
         )
         if reporter is not None:
             reporter.update(record, log.best_genome)
@@ -335,7 +368,9 @@ def evolve(
 
         fraction = min(budget_tracker.spent / run_config.total_budget, 1.0)
         k = run_config.k_start * (run_config.k_end / run_config.k_start) ** fraction
-        population = evolve_generation(population, scores, rng_select, rng_cross, rng_mut, k, run_config)
+        population, known_scores = evolve_generation(
+            population, scores, rng_select, rng_cross, rng_mut, k, run_config
+        )
         generation += 1
 
     if log.best_genome is not None:

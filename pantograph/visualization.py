@@ -23,7 +23,7 @@ from matplotlib.figure import Figure
 from .config import DEFAULT_CONFIG
 from .curve import TargetCurve
 from .genome import CRANK, FIXED_A, FIXED_B, Genome, link_lengths, tracer
-from .simulator import positions_at, simulate
+from .simulator import branch_signs, positions_at, simulate
 from .validation import InvalidTopology, solving_order, validate
 
 TARGET_STYLE = dict(color="tab:gray", lw=1.5, label="циљна крива")
@@ -244,14 +244,17 @@ def animate(genome: Genome, n: int = 200, save: str | None = None, target: Targe
     trace_line, = ax.plot([], [], "-", **PATH_STYLE)
     ax.legend(loc="upper right", fontsize=8)
 
-    state = {"positions": coords.copy(), "trace": []}
+    # Знак гране је закуцан из θ=0 геометрије једном, пре анимације (DECISIONS §17) —
+    # конфигурација на сваком углу зависи искључиво од угла и `signs`, не од претходног
+    # кадра, па база остаје увек `coords`.
+    signs = branch_signs(topology, coords, order)
+    state = {"trace": []}
     min_sin_angle = float(np.sin(np.radians(DEFAULT_CONFIG.min_transmission_angle_deg)))
 
     def update(angle):
-        positions = positions_at(topology, lengths, state["positions"], order, angle, min_sin_angle)
+        positions = positions_at(topology, lengths, coords, order, angle, signs, min_sin_angle)
         if positions is None:
             return edge_lines + [trace_line]
-        state["positions"] = positions
         state["trace"].append(positions[tracer_index].copy())
 
         for line, (a, b) in zip(edge_lines, topology.edges):

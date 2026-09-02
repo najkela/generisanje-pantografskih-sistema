@@ -95,8 +95,10 @@ class GenerationRecord:
     величина предачког стабла трагача (радни чворови, за разлику од укупног `best_n_nodes`
     који укључује и мртав терет). `min_transmission_angle_deg`/`path_jump_count`/
     `path_loop_closure` додати 01.09. (docs/NALAZ_01_09_ugao_prenosa.md) — здравље путање
-    најбоље јединке генерације. Ниједно поље не мења ток претраге — сва се рачунају из
-    већ израчунатих `scores`/топологије/путање, ван буџета (без `CallCounter`-а).
+    најбоље јединке генерације. `link_to_radius_ratio` додат 02.09. (DECISIONS §17) —
+    гломазност механизма (највећа полуга / полупречник путање), дијагностика, НЕ улази у
+    оцену. Ниједно поље не мења ток претраге — сва се рачунају из већ израчунатих
+    `scores`/топологије/путање, ван буџета (без `CallCounter`-а).
     """
 
     generation: int
@@ -111,6 +113,7 @@ class GenerationRecord:
     min_transmission_angle_deg: float = float("nan")  # мин. угао преноса кроз обртај (docs/NALAZ_01_09...)
     path_jump_count: int = 0                          # скокова у путањи (корак > 8× медијане)
     path_loop_closure: float = float("nan")           # |последња−прва тачка| / медијана корака
+    link_to_radius_ratio: float = float("nan")        # највећа полуга / полупречник путање (DECISIONS §17)
 
 
 @dataclass
@@ -153,12 +156,14 @@ class RunLog:
         min_transmission_angle_deg: float = float("nan"),
         path_jump_count: int = 0,
         path_loop_closure: float = float("nan"),
+        link_to_radius_ratio: float = float("nan"),
     ) -> GenerationRecord:
         """Дописује ред и враћа га — позивалац (`baseline.evolve`) га прослеђује репортеру."""
         entry = GenerationRecord(
             generation, calls_spent, best_fitness, mean_fitness, n_curve, best_n_nodes,
             best_so_far, invalid_count, working_nodes,
             min_transmission_angle_deg, path_jump_count, path_loop_closure,
+            link_to_radius_ratio,
         )
         self.records.append(entry)
         self.final_error = best_fitness

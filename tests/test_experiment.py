@@ -1,11 +1,15 @@
 """Спецификација заједничке инфраструктуре: буџет, распоред N, RNG токови, лог (README 2.4,
 3.2, 4.3; BASELINE_SPEC §7, §9)."""
 
+import json
+
 import numpy as np
 
 from pantograph.config import Config
 from pantograph.experiment import (
     Budget,
+    GenerationRecord,
+    RunLog,
     curve_file_hash,
     plateau_detected,
     resolution_schedule,
@@ -75,3 +79,51 @@ def test_curve_file_hash_is_deterministic(tmp_path):
     h2 = curve_file_hash(str(path))
     assert h1 == h2
     assert isinstance(h1, str) and len(h1) == 64  # sha256 hex
+
+
+def test_generation_record_link_to_radius_ratio_defaults_to_nan():
+    """Ново поље (DECISIONS §17) — гломазност — има подразумевану вредност `nan` кад се не
+    наведе (потребно да `RunLog.load` учита старе логове без овог поља)."""
+    record = GenerationRecord(
+        generation=0, calls_spent=1, best_fitness=0.1, mean_fitness=0.2, n_curve=90, best_n_nodes=4,
+    )
+    assert np.isnan(record.link_to_radius_ratio)
+
+
+def test_run_log_load_tolerates_records_without_link_to_radius_ratio(tmp_path):
+    """`RunLog.load` мора учитати стари лог чији записи немају `link_to_radius_ratio`
+    (додато 02.09., DECISIONS §17) — филтрира по именима поља `GenerationRecord`, непозната
+    поља игнорише, недостајућа добијају подразумевану вредност (`nan`)."""
+    old_style_record = {
+        "generation": 0,
+        "calls_spent": 10,
+        "best_fitness": 0.05,
+        "mean_fitness": 0.1,
+        "n_curve": 90,
+        "best_n_nodes": 4,
+        "best_so_far": 0.05,
+        "invalid_count": 0,
+        "working_nodes": 4,
+        "min_transmission_angle_deg": 12.0,
+        "path_jump_count": 0,
+        "path_loop_closure": 1.0,
+        # НЕМА "link_to_radius_ratio" — симулира лог снимљен пре 02.09.
+    }
+    data = {
+        "method": "baseline",
+        "curve": "data/curves/circle.txt",
+        "seed": 1,
+        "curve_hash": "",
+        "git_commit": "",
+        "config": {},
+        "final_error": 0.05,
+        "records": [old_style_record],
+        "best_genome": None,
+    }
+    path = tmp_path / "log.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    log = RunLog.load(str(path))
+
+    assert len(log.records) == 1
+    assert np.isnan(log.records[0].link_to_radius_ratio)

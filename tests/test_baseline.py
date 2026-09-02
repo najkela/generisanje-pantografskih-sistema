@@ -1,11 +1,14 @@
 """Спецификација baseline ГА: select, crossover, mutate, evolve_generation, evolve
 (README 2.2, BASELINE_SPEC §5, §6, §9)."""
 
+import dataclasses
+
 import numpy as np
 
 from pantograph.baseline import crossover, evolve, evolve_generation, mutate, select
 from pantograph.config import DEFAULT_CONFIG
 from pantograph.curve import TargetCurve
+from pantograph.fitness import evaluate
 from pantograph.genome import Genome, Topology
 from pantograph.operators import random_initial_genome
 from pantograph.validation import degrees_of_freedom, validate
@@ -104,11 +107,12 @@ def test_evolve_generation_preserves_population_size():
     rng_cross = np.random.default_rng(2)
     rng_mut = np.random.default_rng(3)
 
-    next_generation = evolve_generation(
+    next_generation, known_scores = evolve_generation(
         population, scores, rng_select, rng_cross, rng_mut, k=0.1, config=DEFAULT_CONFIG
     )
 
     assert len(next_generation) == len(population)
+    assert len(known_scores) == len(population)
 
 
 def test_evolve_generation_elite_survives_unchanged():
@@ -119,7 +123,7 @@ def test_evolve_generation_elite_survives_unchanged():
     rng_cross = np.random.default_rng(2)
     rng_mut = np.random.default_rng(3)
 
-    next_generation = evolve_generation(
+    next_generation, known_scores = evolve_generation(
         population, scores, rng_select, rng_cross, rng_mut, k=0.1, config=DEFAULT_CONFIG
     )
 
@@ -127,10 +131,59 @@ def test_evolve_generation_elite_survives_unchanged():
     assert np.allclose(next_generation[0].coords, best.coords)
     validate(next_generation[0].topology)  # елита остаје валидна
 
+    n_elite = round(len(population) * 0.20)
+    # Елитне позиције носе познату оцену (DECISIONS §17, кеш елите) — идентичну сортираним
+    # оценама родитеља; остале позиције (укрштање/мутација) су непознате.
+    assert list(known_scores[:n_elite]) == list(np.sort(scores)[:n_elite])
+    assert all(s is None for s in known_scores[n_elite:])
+
+
+def test_evolve_caches_elite_scores_within_same_n(circle):
+    """Кеш оцене елите унутар истог N (DECISIONS §17): друга генерација троши тачно мање
+    позива за број кеширане елите."""
+    from scipy.spatial import cKDTree
+
+    target = TargetCurve(points=circle, tree=cKDTree(circle))
+    population_size = 20
+    # n_schedule са једним нивоом → N се никад не мења, кеш никад не пада (изолује ефекат).
+    config = dataclasses.replace(DEFAULT_CONFIG, n_schedule=(90,), population_size=population_size)
+    log = evolve(target, budget=200, seed=1, population_size=population_size, config=config)
+
+    assert len(log.records) >= 2
+    n_elite = round(population_size * 0.20)
+    delta = log.records[1].calls_spent - log.records[0].calls_spent
+    assert delta == population_size - n_elite
+
+
+def test_evolve_generation_known_scores_match_reevaluation(circle):
+    """Два узастопна позива `evolve_generation` при непромењеном N: елитне позиције из другог
+    позива носе оцену која се бит-подудара са директним поновним `evaluate` над истим
+    геномом/N-ом (DECISIONS §17: "оцене непромењене елите су бит-идентичне")."""
+    from scipy.spatial import cKDTree
+
+    target = TargetCurve(points=circle, tree=cKDTree(circle))
+    population = [_random_genome(n, seed=n) for n in (5, 6, 7, 8, 5, 6, 7, 8, 5, 6, 5, 6, 7, 8, 5, 6, 7, 8, 5, 6)]
+    n_curve = 90
+    rng_select = np.random.default_rng(1)
+    rng_cross = np.random.default_rng(2)
+    rng_mut = np.random.default_rng(3)
+
+    scores1 = np.array([evaluate(g, target, n_curve) for g in population])
+    generation2, known_scores2 = evolve_generation(
+        population, scores1, rng_select, rng_cross, rng_mut, k=0.1, config=DEFAULT_CONFIG
+    )
+
+    n_elite = round(len(population) * 0.20)
+    for i in range(n_elite):
+        assert known_scores2[i] is not None
+        assert known_scores2[i] == evaluate(generation2[i], target, n_curve)
+
 
 def test_evolve_runs_to_budget_and_returns_run_log(circle):
     """Интеграциони тест малог обима: цела петља (README 3.3, BASELINE_SPEC §9) — заврши,
-    троши тачно буџет, RunLog садржи записе, коначна грешка коначан број."""
+    достигне/премаши буџет (кеш елите значи да генерације не троше увек тачно
+    `population_size` позива, DECISIONS §17), RunLog садржи записе, коначна грешка коначан
+    број."""
     from scipy.spatial import cKDTree
 
     target = TargetCurve(points=circle, tree=cKDTree(circle))
@@ -139,7 +192,10 @@ def test_evolve_runs_to_budget_and_returns_run_log(circle):
     assert log.method == "baseline"
     assert log.seed == 1
     assert len(log.records) > 0
-    assert log.records[-1].calls_spent == 200  # тачно потрошен буџет (10 по генерацији)
+    assert log.records[-1].calls_spent >= 200  # буџет достигнут или премашен, никад мање
     assert np.isfinite(log.final_error)
     assert log.best_genome is not None
     assert log.error_curve == [(r.calls_spent, r.best_fitness) for r in log.records]
+    # Гломазност (DECISIONS §17) — коначна за сваку генерацију кад постоји решива најбоља
+    # јединка (circle fixture-у решиве јединке падају брзо преко пуне популације).
+    assert all(np.isfinite(r.link_to_radius_ratio) for r in log.records)
