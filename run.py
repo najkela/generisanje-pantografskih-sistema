@@ -19,14 +19,14 @@ import numpy as np
 
 from pantograph.baseline import evolve
 from pantograph.config import DEFAULT_CONFIG, QUICK_CONFIG
-from pantograph.curve import TargetCurve, apply_similarity_transform
+from pantograph.curve import TargetCurve, apply_similarity_transform, place_on_target
 from pantograph.experiment import (
     RunLog,
     _genome_to_dict,
     curve_file_hash,
     git_commit_hash,
 )
-from pantograph.fitness import chamfer, fit_similarity_transform
+from pantograph.fitness import chamfer
 from pantograph.genome import Genome, Topology
 from pantograph.progress import ProgressReporter
 from pantograph.simulator import simulate
@@ -150,7 +150,7 @@ def run_experiment(args: argparse.Namespace) -> None:
     if log.best_genome is not None:
         best_path = tracer_path(log.best_genome, n=720)
         if best_path is not None:
-            tx, ty, angle, scale = fit_similarity_transform(best_path, target.at_resolution(720))
+            tx, ty, angle, scale = place_on_target(best_path)
             log.best_genome.coords = apply_similarity_transform(
                 log.best_genome.coords, tx, ty, angle, scale
             )

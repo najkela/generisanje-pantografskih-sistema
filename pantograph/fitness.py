@@ -1,11 +1,11 @@
 """Chamfer растојање и казне за невалидна решења (README 1.6)."""
 
 import numpy as np
-from scipy.optimize import minimize
 from scipy.spatial import cKDTree
 
-from .curve import TargetCurve, apply_similarity_transform, center_and_radius
-from .genome import Genome
+from .config import Config, DEFAULT_CONFIG
+from .curve import TargetCurve, center_and_radius
+from .genome import Genome, link_lengths
 from .simulator import CallCounter, simulate
 from .validation import InvalidTopology, validate
 
@@ -34,6 +34,7 @@ def evaluate(
     target: TargetCurve,
     n: int,
     counter: CallCounter | None = None,
+    config: Config = DEFAULT_CONFIG,
 ) -> float:
     """Фитнес једне јединке: валидација → симулација → Chamfer, уз казну на сваком паду.
 
@@ -52,6 +53,13 @@ def evaluate(
     дегенерисане путање (сведена на тачку) ~0, враћа се `PENALTY` пре дељења нулом.
     Циљна крива се подузоркује на текуће `n` (`TargetCurve.at_resolution`) да оба скупа буду
     исте густине.
+
+    Гломазност (DECISIONS §17, ревизија) — ТВРДА ГРАНИЦА уведена ПОСЛЕ пуне скалне
+    инваријантности: без ње претрага одлази у гломазна решења (мерено 6.73× и 26.78× на
+    буџету од 12 000 позива, механизам 27× већи од своје криве). Однос највеће полуге и
+    полупречника путање изнад `config.max_link_to_radius_ratio` → `PENALTY`. Ово НИЈЕ члан у
+    фитнесу — Chamfer остаје једина мера квалитета поклапања, гломазност само одсеца
+    неупотребљив део простора решења пре него што се уопште мери облик.
     """
     if counter is not None:
         counter.increment()
@@ -67,34 +75,9 @@ def evaluate(
     if radius < 1e-9:
         return PENALTY  # дегенерисана путања (сведена на тачку) — дељење нулом у normalize
 
+    largest_link = max(link_lengths(genome.topology, genome.coords).values())
+    if largest_link / radius > config.max_link_to_radius_ratio:
+        return PENALTY  # гломазан механизам — тврда граница, DECISIONS §17 (ревизија)
+
     normalized_path = (path - center) / radius  # нумерички идентично curve.normalize(path)
     return min(chamfer(normalized_path, target.at_resolution(n)), FITNESS_CAP)
-
-
-def fit_similarity_transform(
-    path: np.ndarray, target: TargetCurve, n_restarts: int = 8
-) -> tuple[float, float, float, float]:
-    """Најбоља сличносна трансформација (tx, ty, angle, scale) која минимизира
-    Chamfer(трансформисан `path`, `target`) (README 1.5, DECISIONS §17).
-
-    Позива се ЈЕДНОМ по покретању, на крају, ван буџета претраге — примењује се на
-    координате најбоље јединке (`run.py`) да снимљени механизам стварно исцртава циљну
-    криву на њеном месту и у њеној величини. Nelder-Mead, вишеструки рестарти по почетном
-    углу ротације (мерено довољно 8, README 1.5) — скала параметризована као `exp(log_scale)`
-    да остане позитивна без ограничења на оптимизатора.
-    """
-
-    def loss(params: np.ndarray) -> float:
-        tx, ty, angle, log_scale = params
-        transformed = apply_similarity_transform(path, tx, ty, angle, np.exp(log_scale))
-        return chamfer(transformed, target)
-
-    best = None
-    for i in range(n_restarts):
-        angle0 = 2 * np.pi * i / n_restarts
-        result = minimize(loss, x0=[0.0, 0.0, angle0, 0.0], method="Nelder-Mead")
-        if best is None or result.fun < best.fun:
-            best = result
-
-    tx, ty, angle, log_scale = best.x
-    return float(tx), float(ty), float(angle), float(np.exp(log_scale))

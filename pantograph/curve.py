@@ -53,6 +53,27 @@ def apply_similarity_transform(
     return (points @ rotation.T) * scale + np.array([tx, ty])
 
 
+def place_on_target(path: np.ndarray) -> tuple[float, float, float, float]:
+    """Поравнање генерисане путање са циљном кривом — сличносна трансформација у затвореном
+    облику (DECISIONS §17, ревизија).
+
+    Фитнес пореди `normalize(path)` са већ нормализованом циљном кривом, а `normalize` не
+    ротира — ГА је дакле оријентацију већ погодио сам, па је ротација овде нула по
+    конструкцији. Остају транслација и скала, одређене центром и радијусом путање
+    (`center_and_radius`, иста формула коју користи `normalize` и `fitness.evaluate`).
+
+    Резултат: сирова Chamfer постављеног механизма (примени трансформацију на `Genome.coords`,
+    поново симулирај, упореди без нормализације против `TargetCurve.at_resolution(n)`) је
+    ТАЧНО једнака вредности коју враћа `fitness.evaluate` за исту јединку/N (тест:
+    `tests/test_fitness.py`, поклапање до `1e-12`) — поравнање нема режим у ком може да
+    омане, за разлику од итеративне (Nelder-Mead) варијанте коју замењује.
+    """
+    center, radius = center_and_radius(path)
+    if radius < 1e-9:            # дегенерисана путања — иста граница као у `evaluate`
+        return 0.0, 0.0, 0.0, 1.0
+    return -center[0] / radius, -center[1] / radius, 0.0, 1.0 / radius
+
+
 def resample(points: np.ndarray, n: int) -> np.ndarray:
     """Равномерно подузорковање на `n` тачака (динамички N, README 2.4).
 

@@ -1,13 +1,11 @@
 """Спецификација симулатора (README 1.2)."""
 
 import dataclasses
-from pathlib import Path
 
 import numpy as np
 import pytest
 
 from pantograph.config import DEFAULT_CONFIG
-from pantograph.curve import TargetCurve
 from pantograph.fitness import chamfer
 from pantograph.genome import Topology, link_lengths, to_sequence
 from pantograph.operators import random_initial_genome
@@ -50,9 +48,6 @@ def test_branch_signs_matches_to_sequence_signs():
             assert signs[i + 3] == gene.s
 
 
-ELLIPSE_CURVE = Path(__file__).resolve().parent.parent / "data" / "curves" / "ellipse.txt"
-
-
 def _ellipse_seed3_genome() -> tuple[Topology, np.ndarray]:
     """Геном из results/2026-09-01_183518_baseline_ellipse_seed3/best_genome.json — раније
     прескакао грану (docs/NALAZ_01_09_poza.md §1–3); `results/` није под гитом, координате
@@ -74,7 +69,7 @@ def _ellipse_seed3_genome() -> tuple[Topology, np.ndarray]:
     return topology, coords
 
 
-def test_ellipse_seed3_chamfer_is_monotone_and_matches_measurement():
+def test_ellipse_seed3_chamfer_is_monotone_and_matches_measurement(ellipse_curve_file):
     """Дрифт-тест НИЈЕ написан (разматрано и одбачено, DECISIONS §17): са закуцаном граном
     и без зависности од историје, `positions_at(θ₀)` и `positions_at(θ₀+2π)` дају идентичан
     резултат ПО КОНСТРУКЦИЈИ (cos/sin периодични, конфигурација зависи искључиво од угла и
@@ -100,7 +95,7 @@ def test_ellipse_seed3_chamfer_is_monotone_and_matches_measurement():
     topology, coords = _ellipse_seed3_genome()
     order = solving_order(topology)
     config = dataclasses.replace(DEFAULT_CONFIG, min_transmission_angle_deg=5.0)
-    target = TargetCurve.from_file(str(ELLIPSE_CURVE))
+    target = ellipse_curve_file
 
     scores = {}
     for n in (90, 180, 360, 720):

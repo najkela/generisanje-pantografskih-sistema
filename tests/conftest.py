@@ -1,8 +1,11 @@
 """Заједнички fixtures. Сваки тест овде се пише као спецификација README-а."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from pantograph.curve import TargetCurve
 from pantograph.genome import Topology
 
 
@@ -29,3 +32,16 @@ def ellipse() -> np.ndarray:
     """Аналитичка тест крива нивоа 1 (README 3.4)."""
     θ = np.linspace(0, 2 * np.pi, 720, endpoint=False)
     return np.column_stack([3.0 * np.cos(θ), 1.5 * np.sin(θ)])
+
+
+@pytest.fixture
+def ellipse_curve_file() -> TargetCurve:
+    """`TargetCurve` из `data/curves/ellipse.txt` (720 тачака из фајла, не аналитичка).
+
+    Другачије име од `ellipse` (аналитички генерисана) намерно — да се не помешају.
+    Треба тестовима којима је важна конкретна `resample`-ова густина/фаза узорковања
+    (DECISIONS §17): `resample` (узорковање по дужини лука) НИЈЕ идентитет за ову криву,
+    за разлику од `circle`-а, па само она даје таквим тестовима стварну снагу.
+    """
+    path = Path(__file__).resolve().parent.parent / "data" / "curves" / "ellipse.txt"
+    return TargetCurve.from_file(str(path))
