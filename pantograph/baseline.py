@@ -28,7 +28,8 @@ from .experiment import (
 from .fitness import PENALTY, evaluate
 from .genome import Genome, Sequence, from_sequence, to_sequence
 from .operators import add_node, delete_node, mutate_coords, prune_dead_nodes, random_initial_genome
-from .validation import InvalidTopology
+from .simulator import path_health, simulate_with_transmission_angle
+from .validation import InvalidTopology, validate
 
 if TYPE_CHECKING:
     # само за анотацију типа — `evolve` не сме да увезе `progress` на runtime нивоу
@@ -285,23 +286,41 @@ def evolve(
             log.best_genome = _copy_genome(population[best_index])
 
         invalid_count = int((scores >= PENALTY).sum())
+        best_genome = population[best_index]
         try:
-            working_topology, _ = prune_dead_nodes(
-                population[best_index].topology, population[best_index].coords
-            )
+            working_topology, _ = prune_dead_nodes(best_genome.topology, best_genome.coords)
             working_nodes = working_topology.n_nodes
         except InvalidTopology:
             working_nodes = 0  # одбрамбено — не треба да се деси за валидну јединку
+
+        # Здравље путање најбоље јединке — ван буџета, `simulate_with_transmission_angle`
+        # не троши `budget_tracker.counter` (docs/NALAZ_01_09_ugao_prenosa.md, задатак 3).
+        try:
+            best_order = validate(best_genome.topology)
+            diag = simulate_with_transmission_angle(
+                best_genome.topology, best_genome.coords, best_order, n_curve, run_config
+            )
+        except InvalidTopology:
+            diag = None
+        if diag is not None:
+            best_path, min_angle_deg = diag
+            jump_count, loop_closure = path_health(best_path)
+        else:
+            min_angle_deg, jump_count, loop_closure = float("nan"), 0, float("nan")
+
         record = log.record(
             generation=generation,
             calls_spent=budget_tracker.spent,
             best_fitness=best_score,
             mean_fitness=float(scores.mean()),
             n_curve=n_curve,
-            best_n_nodes=population[best_index].topology.n_nodes,
+            best_n_nodes=best_genome.topology.n_nodes,
             best_so_far=best_score_so_far,
             invalid_count=invalid_count,
             working_nodes=working_nodes,
+            min_transmission_angle_deg=min_angle_deg,
+            path_jump_count=jump_count,
+            path_loop_closure=loop_closure,
         )
         if reporter is not None:
             reporter.update(record, log.best_genome)
@@ -318,5 +337,18 @@ def evolve(
         k = run_config.k_start * (run_config.k_end / run_config.k_start) ** fraction
         population = evolve_generation(population, scores, rng_select, rng_cross, rng_mut, k, run_config)
         generation += 1
+
+    if log.best_genome is not None:
+        # Скраћивање мртвог терета на самом крају, само једном — не по генерацији
+        # (README 2.3, `prune_dead_nodes`). Чворови ван предачког стабла tracer-a не
+        # утичу на путању (симулатор их не решава), па скраћивање не мења ни Chamfer
+        # ни анимацију осим што уклања вишак ивица/чворова са цртежа.
+        try:
+            pruned_topology, pruned_coords = prune_dead_nodes(
+                log.best_genome.topology, log.best_genome.coords
+            )
+            log.best_genome = Genome(topology=pruned_topology, coords=pruned_coords)
+        except InvalidTopology:
+            pass  # одбрамбено — не треба да се деси за већ валидну најбољу јединку
 
     return log

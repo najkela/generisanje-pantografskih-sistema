@@ -160,6 +160,7 @@ class ProgressReporter:
             f"стагнација {stagnation:>4} ген. │ "
             f"N={record.n_curve:>3} │ "
             f"чворова {record.best_n_nodes:>2} (радних {record.working_nodes:>2}) │ "
+            f"угао {record.min_transmission_angle_deg:>5.1f}° │ "
             f"невалидних {self._invalid_share(record):>5} │ "
             f"буџет {percent:>5.1f}%"
         )
@@ -235,6 +236,9 @@ class ProgressReporter:
             ("трајање", _elapsed(time.monotonic() - self._t0)),
             ("коначна грешка", f"{log.final_error:.6e} (Chamfer)"),
             ("најбоља јединка", f"{nodes} чворова, {edges} полуга"),
+            ("угао преноса", f"{last.min_transmission_angle_deg:.1f}° (мин. кроз обртај)"),
+            ("скокова у путањи", str(last.path_jump_count)),
+            ("затварање петље", f"{last.path_loop_closure:.2f}× медијане корака"),
         ]
         if self._snapshots:
             rows.append(("снимака", f"{len(self._snapshots)} у snapshots/"))

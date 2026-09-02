@@ -67,7 +67,7 @@ def random_initial_genome(
         pair = circle_intersect_pair(pa, pb, rho_a * d, rho_b * d)
         if pair is None:
             return None
-        p_plus, p_minus = pair
+        p_plus, p_minus, _h = pair
         coords[k] = p_plus if rng.choice([True, False]) else p_minus
         edges.append((a, k))
         edges.append((b, k))
@@ -139,7 +139,7 @@ def _add_node_mode_b(
     pair = circle_intersect_pair(pa, pb, rho_a * d, rho_b * d)
     if pair is None:
         return None
-    p_plus, p_minus = pair
+    p_plus, p_minus, _h = pair
     s = int(rng.choice([1, -1]))
     new_point = p_plus if s == 1 else p_minus
 

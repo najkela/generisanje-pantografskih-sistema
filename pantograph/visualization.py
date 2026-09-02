@@ -20,6 +20,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
+from .config import DEFAULT_CONFIG
 from .curve import TargetCurve
 from .genome import CRANK, FIXED_A, FIXED_B, Genome, link_lengths, tracer
 from .simulator import positions_at, simulate
@@ -244,9 +245,10 @@ def animate(genome: Genome, n: int = 200, save: str | None = None, target: Targe
     ax.legend(loc="upper right", fontsize=8)
 
     state = {"positions": coords.copy(), "trace": []}
+    min_sin_angle = float(np.sin(np.radians(DEFAULT_CONFIG.min_transmission_angle_deg)))
 
     def update(angle):
-        positions = positions_at(topology, lengths, state["positions"], order, angle)
+        positions = positions_at(topology, lengths, state["positions"], order, angle, min_sin_angle)
         if positions is None:
             return edge_lines + [trace_line]
         state["positions"] = positions

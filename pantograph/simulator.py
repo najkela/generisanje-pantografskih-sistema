@@ -6,6 +6,7 @@
 
 import numpy as np
 
+from .config import Config, DEFAULT_CONFIG
 from .genome import CRANK, FIXED_A, Topology, link_lengths, tracer
 from .validation import Step
 
@@ -33,14 +34,17 @@ def circle_intersect_pair(
     p2: np.ndarray,
     r1: float,
     r2: float,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Обе тачке пресека кругова (p1,r1) и (p2,r2); прва одговара грани s=+1, друга s=−1.
+) -> tuple[np.ndarray, np.ndarray, float] | None:
+    """Обе тачке пресека кругова (p1,r1) и (p2,r2), плус полутетива `h`; прва тачка
+    одговара грани s=+1, друга s=−1.
 
     Пресек не постоји ако је `d > r1+r2` или `d < |r1−r2|` (README 1.4) — тада враћа `None`.
     Конвенција гране (README 1.2.1): нека је `u = (p2−p1)/d`; `s=+1` је тачка помакнута
     од средишње тачке дужи p1p2 у смеру ротације `u` за +90°, `s=−1` у супротном смеру.
     Ово је основна геометрија коју користе и `circle_intersect` (симулација) и
-    `genome.to_sequence`/`from_sequence` (канонизација, README 1.2.1).
+    `genome.to_sequence`/`from_sequence` (канонизација, README 1.2.1) — `h` се враћа само
+    за потребе провере угла преноса у `circle_intersect`; канонизација га игнорише и остаје
+    бихевиорално непромењена (docs/NALAZ_01_09_ugao_prenosa.md).
     """
     d = float(np.linalg.norm(p2 - p1))
     if d == 0.0:
@@ -52,7 +56,14 @@ def circle_intersect_pair(
     u = (p2 - p1) / d
     midpoint = p1 + a * u
     perp = np.array([-u[1], u[0]])
-    return midpoint + h * perp, midpoint - h * perp
+    return midpoint + h * perp, midpoint - h * perp, h
+
+
+def _closer_branch(p_plus: np.ndarray, p_minus: np.ndarray, previous: np.ndarray) -> np.ndarray:
+    """Бира грану circle-circle пресека ближу претходном положају чвора."""
+    d_plus = np.linalg.norm(p_plus - previous)
+    d_minus = np.linalg.norm(p_minus - previous)
+    return p_plus if d_plus <= d_minus else p_minus
 
 
 def circle_intersect(
@@ -61,22 +72,32 @@ def circle_intersect(
     r1: float,
     r2: float,
     previous: np.ndarray,
+    min_sin_angle: float,
 ) -> np.ndarray | None:
     """Пресек два круга; бира грану ближу претходној позицији чвора.
 
     Враћа `None` ако пресека нема (d > r1+r2 или d < |r1−r2|) — то је невалидна
     геометрија у том тренутку, коју фитнес претвара у коначну казну (README 1.6).
 
-    Хеуристика избора гране је извор circuit defect проблема (README 4.4, отворено 4.1) —
-    не додавати проверу скока док одлука не буде донета.
+    Враћа `None` и ако је угао преноса ∠(a–u–b) исувише близу 0°/180° (мртва тачка):
+    `sin(∠aub) = d·h / (r1·r2)` из површине троугла (docs/NALAZ_01_09_ugao_prenosa.md) —
+    два множења и једно дељење, без арккосинуса у петљи; `sin` покрива оба колинеарна
+    случаја без грањања. Провера иде ПРЕ бирања гране (`sin_angle` не зависи од ње) —
+    јефтино прво, скупо после, исти принцип као валидација топологије. `min_sin_angle` је
+    `sin(radians(праг))` већ израчунат једном у `simulate`, не по позиву.
+
+    Хеуристика избора гране је и даље извор circuit defect проблема (README 4.4,
+    отворено 4.1) — ово НИЈЕ та провера (не детектује скок између грана), не мешати их.
     """
     pair = circle_intersect_pair(p1, p2, r1, r2)
     if pair is None:
         return None
-    p_plus, p_minus = pair
-    d_plus = np.linalg.norm(p_plus - previous)
-    d_minus = np.linalg.norm(p_minus - previous)
-    return p_plus if d_plus <= d_minus else p_minus
+    p_plus, p_minus, h = pair
+    d = float(np.linalg.norm(p2 - p1))
+    sin_angle = (d * h) / (r1 * r2)
+    if sin_angle < min_sin_angle:
+        return None
+    return _closer_branch(p_plus, p_minus, previous)
 
 
 def positions_at(
@@ -85,8 +106,10 @@ def positions_at(
     previous: np.ndarray,
     order: list[Step],
     angle: float,
+    min_sin_angle: float,
 ) -> np.ndarray | None:
-    """Позиције свих чворова за дати угао crank-а; `None` ако пресек не постоји.
+    """Позиције свих чворова за дати угао crank-а; `None` ако пресек не постоји или је
+    угао преноса неког чвора испод прага (README 1.4, docs/NALAZ_01_09_ugao_prenosa.md).
 
     Fixed чворови (0,1) се преузимају непромењени из `previous`. Crank(2) се поставља
     директно на растојању `l(0,2)` под апсолутним углом `angle` (нема drift-а — не рачуна
@@ -102,7 +125,7 @@ def positions_at(
         a, b = step.parents
         ra = _link_length(lengths, a, u)
         rb = _link_length(lengths, b, u)
-        point = circle_intersect(positions[a], positions[b], ra, rb, previous[u])
+        point = circle_intersect(positions[a], positions[b], ra, rb, previous[u], min_sin_angle)
         if point is None:
             return None
         positions[u] = point
@@ -115,6 +138,7 @@ def simulate(
     coords: np.ndarray,
     order: list[Step],
     n: int,
+    config: Config = DEFAULT_CONFIG,
 ) -> np.ndarray | None:
     """Путања tracer чвора при пуној ротацији crank-а, `n` равномерних корака по θ ∈ [0, 2π).
 
@@ -122,7 +146,73 @@ def simulate(
     (README 1.2.1). Апсолутни угао crank-а у θ=0 (`theta0`) се чита из `coords` — прва
     тачка путање тако тачно репродукује улазну геометрију, без вештачког скока на почетку.
 
+    Праг угла преноса (`config.min_transmission_angle_deg`) се претвара у `sin` ЈЕДНОМ,
+    ван петље по `n` и по solving order кораку (docs/NALAZ_01_09_ugao_prenosa.md) —
+    `fitness.evaluate` позива ову функцију без `config`, добија подразумевани праг из
+    `DEFAULT_CONFIG` без икакве измене у `fitness.py`.
+
     Враћа низ облика (n, 2) или `None` ако геометрија у неком тренутку није решива.
+    """
+    lengths = link_lengths(topology, coords)
+    tracer_index = tracer(topology.n_nodes)
+    theta0 = float(np.arctan2(*(coords[CRANK] - coords[FIXED_A])[::-1]))
+    min_sin_angle = float(np.sin(np.radians(config.min_transmission_angle_deg)))
+
+    positions = coords.copy()
+    path = np.zeros((n, 2))
+    for i, phi in enumerate(np.linspace(0.0, 2 * np.pi, n, endpoint=False)):
+        positions = positions_at(topology, lengths, positions, order, theta0 + phi, min_sin_angle)
+        if positions is None:
+            return None
+        path[i] = positions[tracer_index]
+
+    return path
+
+
+def positions_and_angle_at(
+    topology: Topology,
+    lengths: dict[tuple[int, int], float],
+    previous: np.ndarray,
+    order: list[Step],
+    angle: float,
+) -> tuple[np.ndarray, float] | None:
+    """Као `positions_at`, БЕЗ прага, уз минимални `sin(угла преноса)` овог тренутка —
+    чиста дијагностика (docs/NALAZ_01_09_ugao_prenosa.md, задатак 3): не позива се из
+    `simulate`/`fitness.evaluate`, само из health-извештавања о најбољој јединки, да
+    `positions_at` остане неоптерећена додатним рачунањем у hot петљи.
+    """
+    positions = previous.copy()
+    r02 = _link_length(lengths, FIXED_A, CRANK)
+    positions[CRANK] = positions[FIXED_A] + r02 * np.array([np.cos(angle), np.sin(angle)])
+
+    min_sin_angle = 1.0  # sin(90°) — најбезбеднија почетна вредност
+    for step in order:
+        u = step.target
+        a, b = step.parents
+        ra = _link_length(lengths, a, u)
+        rb = _link_length(lengths, b, u)
+        pair = circle_intersect_pair(positions[a], positions[b], ra, rb)
+        if pair is None:
+            return None
+        p_plus, p_minus, h = pair
+        d = float(np.linalg.norm(positions[b] - positions[a]))
+        sin_angle = (d * h) / (ra * rb)
+        min_sin_angle = min(min_sin_angle, sin_angle)
+        positions[u] = _closer_branch(p_plus, p_minus, previous[u])
+
+    return positions, min_sin_angle
+
+
+def simulate_with_transmission_angle(
+    topology: Topology,
+    coords: np.ndarray,
+    order: list[Step],
+    n: int,
+    config: Config = DEFAULT_CONFIG,
+) -> tuple[np.ndarray, float] | None:
+    """Као `simulate`, али уз минимални угао преноса (степени) кроз цео обртај — чиста
+    дијагностика ван буџета (docs/NALAZ_01_09_ugao_prenosa.md, задатак 3): не троши
+    `CallCounter`, зове се једном по генерацији за најбољу јединку, не по кораку.
     """
     lengths = link_lengths(topology, coords)
     tracer_index = tracer(topology.n_nodes)
@@ -130,10 +220,28 @@ def simulate(
 
     positions = coords.copy()
     path = np.zeros((n, 2))
+    min_sin_angle = 1.0
     for i, phi in enumerate(np.linspace(0.0, 2 * np.pi, n, endpoint=False)):
-        positions = positions_at(topology, lengths, positions, order, theta0 + phi)
-        if positions is None:
+        result = positions_and_angle_at(topology, lengths, positions, order, theta0 + phi)
+        if result is None:
             return None
+        positions, step_min_sin = result
+        min_sin_angle = min(min_sin_angle, step_min_sin)
         path[i] = positions[tracer_index]
 
-    return path
+    min_angle_deg = float(np.degrees(np.arcsin(np.clip(min_sin_angle, -1.0, 1.0))))
+    return path, min_angle_deg
+
+
+def path_health(path: np.ndarray) -> tuple[int, float]:
+    """Скокови (корак > 8× медијане) и затварање петље (последња↔прва тачка, у односу
+    на медијану корака) — чист post-processing над већ израчунатом путањом, без иједног
+    додатног позива симулатора (docs/NALAZ_01_09_ugao_prenosa.md, задатак 3).
+    """
+    steps = np.linalg.norm(np.diff(path, axis=0), axis=1)
+    median_step = float(np.median(steps))
+    if median_step <= 0:
+        return 0, 0.0
+    jump_count = int(np.sum(steps > 8 * median_step))
+    loop_closure = float(np.linalg.norm(path[-1] - path[0]) / median_step)
+    return jump_count, loop_closure

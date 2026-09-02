@@ -111,10 +111,16 @@ def to_sequence(topology: Topology, coords: np.ndarray) -> Sequence:
 
     Позиције `a`, `b` у сваком гену показују на место ослонца У СЕКВЕНЦИ — мапирање је
     потребно јер BFS solving order не мора да поклопи нумеричке индексе чворова.
+
+    Подиже `InvalidTopology` ако су ослонци неког чвора поклопљени у θ=0 (`d == 0`,
+    дељење са нулом) или ако је round-trip `rho_a*d + rho_b*d` нумерички опало испод
+    `d` за чвор колинеаран са ослонцима — `circle_intersect_pair` тада враћа `None`
+    иако је геном у θ=0 био геометријски исправан (докстринг у прошлости то није
+    хватао, `TypeError` на распакивању уместо контролисаног одбацивања).
     """
     # Локални увоз: `validation` и `simulator` увозе из `genome`, циклични увоз на врху фајла.
     from .simulator import circle_intersect_pair
-    from .validation import solving_order
+    from .validation import InvalidTopology, solving_order
 
     order = solving_order(topology)
 
@@ -128,9 +134,16 @@ def to_sequence(topology: Topology, coords: np.ndarray) -> Sequence:
         a_node, b_node = step.parents
         pa, pb = coords[a_node], coords[b_node]
         d = float(np.linalg.norm(pb - pa))
+        if d == 0.0:
+            raise InvalidTopology(f"Ослонци чвора {u} се поклапају у θ=0.")
         rho_a = float(np.linalg.norm(coords[u] - pa) / d)
         rho_b = float(np.linalg.norm(coords[u] - pb) / d)
-        p_plus, p_minus = circle_intersect_pair(pa, pb, rho_a * d, rho_b * d)
+        pair = circle_intersect_pair(pa, pb, rho_a * d, rho_b * d)
+        if pair is None:
+            raise InvalidTopology(
+                f"Чвор {u} је колинеаран са ослонцима у θ=0 (нумерички дегенерисан пресек)."
+            )
+        p_plus, p_minus, _h = pair
         s = 1 if np.linalg.norm(coords[u] - p_plus) <= np.linalg.norm(coords[u] - p_minus) else -1
         genes.append(
             SequenceGene(a=position_of[a_node], b=position_of[b_node], rho_a=rho_a, rho_b=rho_b, s=s)
@@ -158,7 +171,7 @@ def from_sequence(seq: Sequence) -> tuple[Topology, np.ndarray] | None:
         pair = circle_intersect_pair(pa, pb, gene.rho_a * d, gene.rho_b * d)
         if pair is None:
             return None
-        p_plus, p_minus = pair
+        p_plus, p_minus, _h = pair
         coords[k] = p_plus if gene.s == 1 else p_minus
         edges.append((gene.a, k))
         edges.append((gene.b, k))

@@ -93,8 +93,10 @@ class GenerationRecord:
     `best_so_far` и `invalid_count` додати 31.08. ради испраћивања покретања (испис у
     конзоли, `ProgressReporter`). `working_nodes` додат 01.09. (docs/NALAZ_31_08.md) —
     величина предачког стабла трагача (радни чворови, за разлику од укупног `best_n_nodes`
-    који укључује и мртав терет). Ниједно не мења ток претраге — сва три се рачунају из
-    већ израчунатих `scores`/топологије, без иједног додатног позива симулатора.
+    који укључује и мртав терет). `min_transmission_angle_deg`/`path_jump_count`/
+    `path_loop_closure` додати 01.09. (docs/NALAZ_01_09_ugao_prenosa.md) — здравље путање
+    најбоље јединке генерације. Ниједно поље не мења ток претраге — сва се рачунају из
+    већ израчунатих `scores`/топологије/путање, ван буџета (без `CallCounter`-а).
     """
 
     generation: int
@@ -106,6 +108,9 @@ class GenerationRecord:
     best_so_far: float = float("nan")   # најбољи фитнес од почетка покретања, не само у овој генерацији
     invalid_count: int = 0              # број јединки које су добиле казну (в. `fitness.PENALTY`)
     working_nodes: int = 0              # величина предачког стабла трагача (docs/NALAZ_31_08.md, 01.09.)
+    min_transmission_angle_deg: float = float("nan")  # мин. угао преноса кроз обртај (docs/NALAZ_01_09...)
+    path_jump_count: int = 0                          # скокова у путањи (корак > 8× медијане)
+    path_loop_closure: float = float("nan")           # |последња−прва тачка| / медијана корака
 
 
 @dataclass
@@ -145,11 +150,15 @@ class RunLog:
         best_so_far: float = float("nan"),
         invalid_count: int = 0,
         working_nodes: int = 0,
+        min_transmission_angle_deg: float = float("nan"),
+        path_jump_count: int = 0,
+        path_loop_closure: float = float("nan"),
     ) -> GenerationRecord:
         """Дописује ред и враћа га — позивалац (`baseline.evolve`) га прослеђује репортеру."""
         entry = GenerationRecord(
             generation, calls_spent, best_fitness, mean_fitness, n_curve, best_n_nodes,
             best_so_far, invalid_count, working_nodes,
+            min_transmission_angle_deg, path_jump_count, path_loop_closure,
         )
         self.records.append(entry)
         self.final_error = best_fitness
