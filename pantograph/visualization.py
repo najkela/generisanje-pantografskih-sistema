@@ -20,7 +20,7 @@ from matplotlib.animation import FuncAnimation, PillowWriter
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
-from .config import DEFAULT_CONFIG
+from .config import Config, DEFAULT_CONFIG
 from .curve import TargetCurve
 from .genome import CRANK, FIXED_A, FIXED_B, Genome, link_lengths, tracer
 from .simulator import branch_signs, positions_at, simulate
@@ -90,18 +90,22 @@ def _fit_axes(ax, *point_sets: np.ndarray) -> None:
     ax.set_ylim(center[1] - span, center[1] + span)
 
 
-def tracer_path(genome: Genome, n: int) -> np.ndarray | None:
+def tracer_path(genome: Genome, n: int, config: Config = DEFAULT_CONFIG) -> np.ndarray | None:
     """Путања трагача за цртање — `validate` + `simulate`, НИКАД `fitness.evaluate`.
 
     То је оно што снимке чини бесплатним: бројач буџета инкрементира само `evaluate`
     (README 3.3), па колико год се слика нацртало, потрошња позива остаје нетакнута.
     Враћа `None` ако је топологија неважећа или геометрија падне на circuit defect.
+
+    `config` се прослеђује до `simulate` (праг угла преноса) — иначе би слика/поза увек
+    користила `DEFAULT_CONFIG`, тихо мимо конфига под којим је покретање стварно радило
+    (DECISIONS §17; в. `run.py::run_experiment`, које прослеђује своје `config`).
     """
     try:
         order = validate(genome.topology)
     except InvalidTopology:
         return None
-    return simulate(genome.topology, genome.coords, order, n)
+    return simulate(genome.topology, genome.coords, order, n, config)
 
 
 def snapshot(

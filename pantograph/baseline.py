@@ -300,7 +300,7 @@ def evolve(
             if known_scores is not None and known_scores[i] is not None:
                 scores[i] = known_scores[i]
             else:
-                scores[i] = evaluate(g, target, n_curve, counter=budget_tracker.counter)
+                scores[i] = evaluate(g, target, n_curve, counter=budget_tracker.counter, config=run_config)
         previous_n_curve = n_curve
         best_index = int(np.argmin(scores))
         best_score = float(scores[best_index])

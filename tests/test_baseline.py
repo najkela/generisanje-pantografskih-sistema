@@ -199,3 +199,20 @@ def test_evolve_runs_to_budget_and_returns_run_log(circle):
     # Гломазност (DECISIONS §17) — коначна за сваку генерацију кад постоји решива најбоља
     # јединка (circle fixture-у решиве јединке падају брзо преко пуне популације).
     assert all(np.isfinite(r.link_to_radius_ratio) for r in log.records)
+
+
+def test_evolve_respects_config_max_link_to_radius_ratio(ellipse_curve_file):
+    """config се мора стварно проследити до evaluate/simulate (регресија — раније се тихо
+    игнорисао, DECISIONS §17): исти seed, различита граница гломазности → различит резултат."""
+    config_5 = dataclasses.replace(DEFAULT_CONFIG, max_link_to_radius_ratio=5.0)
+    config_10 = dataclasses.replace(DEFAULT_CONFIG, max_link_to_radius_ratio=10.0)
+
+    log_5 = evolve(ellipse_curve_file, budget=600, seed=1, population_size=30, config=config_5)
+    log_10 = evolve(ellipse_curve_file, budget=600, seed=1, population_size=30, config=config_10)
+
+    assert log_5.final_error != log_10.final_error
+    # Детерминистичка тврдња која гађа прослеђивање директно: број невалидних у НУЛТОЈ
+    # генерацији (почетна популација, пре иједног еволутивног корака) зависи ИСКЉУЧИВО од
+    # тога да ли је граница стигла до `evaluate` — мерено (budget=600, pop=30, seed=1):
+    # 19/30 под границом 5, 15/30 под границом 10.
+    assert log_5.records[0].invalid_count > log_10.records[0].invalid_count

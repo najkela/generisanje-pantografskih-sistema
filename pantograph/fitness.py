@@ -67,7 +67,7 @@ def evaluate(
         order = validate(genome.topology)
     except InvalidTopology:
         return PENALTY
-    path = simulate(genome.topology, genome.coords, order, n)
+    path = simulate(genome.topology, genome.coords, order, n, config)
     if path is None:
         return PENALTY
 

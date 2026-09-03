@@ -148,7 +148,7 @@ def run_experiment(args: argparse.Namespace) -> None:
     # Ван буџета, једном по покретању.
     pose = None
     if log.best_genome is not None:
-        best_path = tracer_path(log.best_genome, n=720)
+        best_path = tracer_path(log.best_genome, n=720, config=config)
         if best_path is not None:
             tx, ty, angle, scale = place_on_target(best_path)
             log.best_genome.coords = apply_similarity_transform(
@@ -172,7 +172,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         save=os.path.join(run_dir, "error_curve.png"),
     )
     if log.best_genome is not None:
-        best_path = tracer_path(log.best_genome, n=720)
+        best_path = tracer_path(log.best_genome, n=720, config=config)
         if best_path is not None:
             plot_comparison(
                 best_path, target, title="Путања трагача наспрам циљне криве",
