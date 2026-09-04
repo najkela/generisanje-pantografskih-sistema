@@ -112,12 +112,23 @@ def _construct_cma_es(
     ослонац: конструкција привремено мења глобално стање (опција `seed`), па се чува и
     враћа стање позиваоца, а НОВО стање (после конструкције) се враћа као `rng_state` да
     `_ask_isolated` од њега настави.
+
+    Напомена (нађено при писању тестова, целина Ђ): `ρ` реконструисан из стварне
+    геометрије (нпр. после `delete_node` преспајања зависника) повремено испадне ВАН
+    `[cma_rho_lower, cma_rho_upper]` — `cma` тада одбија саму конструкцију (`geno()` на
+    почетној средини захтева тачку УНУТАР граница, диже `ValueError`). Промпт то не
+    покрива изричито; најбезбедније решење без одлагања за одобрење је `clip` почетне
+    тачке у декларисане границе пре конструкције — исте границе које смо већ увели, не
+    нове, а почетна тачка је свеједно само warm-start процена, не резултат.
     """
     saved = np.random.get_state()
     try:
         n_gene_dims = len(x0) - 4
         lower = [None, None, None, None] + [config.cma_rho_lower] * n_gene_dims
         upper = [None, None, None, None] + [config.cma_rho_upper] * n_gene_dims
+        x0_clipped = list(x0[:4]) + [
+            float(np.clip(v, config.cma_rho_lower, config.cma_rho_upper)) for v in x0[4:]
+        ]
         opts = {
             "CMA_stds": [float(v) for v in stds],
             "bounds": [lower, upper],
@@ -128,7 +139,7 @@ def _construct_cma_es(
         }
         if config.cma_lambda is not None:
             opts["popsize"] = config.cma_lambda
-        es = cma.CMAEvolutionStrategy([float(v) for v in x0], sigma0, opts)
+        es = cma.CMAEvolutionStrategy(x0_clipped, sigma0, opts)
         rng_state = np.random.get_state()
     finally:
         np.random.set_state(saved)
