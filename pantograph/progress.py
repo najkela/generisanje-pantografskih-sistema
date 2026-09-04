@@ -20,6 +20,7 @@
 import sys
 import time
 
+from .config import Config, DEFAULT_CONFIG
 from .curve import TargetCurve
 from .experiment import GenerationRecord, RunLog
 from .genome import Genome
@@ -64,6 +65,7 @@ class ProgressReporter:
         log_every: int = 1,
         snapshot_every: int = 0,
         snapshot_n: int = 720,
+        config: Config = DEFAULT_CONFIG,
         stream=sys.stdout,
     ) -> None:
         self.total_budget = total_budget
@@ -73,6 +75,7 @@ class ProgressReporter:
         self.log_every = max(1, log_every)
         self.snapshot_every = max(0, snapshot_every)
         self.snapshot_n = snapshot_n
+        self.config = config
         self.stream = stream
 
         self._t0 = time.monotonic()
@@ -110,6 +113,7 @@ class ProgressReporter:
             ("популација", str(self.population_size)),
             ("буџет", f"{_thousands(self.total_budget)} позива симулатора"),
             ("распоред N", " → ".join(str(n) for n in n_schedule)),
+            ("гломазност ≤", f"{self.config.max_link_to_radius_ratio:.2f}× (largest_link/path_radius)"),
             ("git commit", (git_commit or "непознат")[:12]),
         ]
         if self.run_dir:
@@ -198,7 +202,7 @@ class ProgressReporter:
             f"N={record.n_curve} · {record.best_n_nodes} чворова"
         )
         try:
-            if snapshot(genome, self.target, path, title=title, n=self.snapshot_n):
+            if snapshot(genome, self.target, path, title=title, n=self.snapshot_n, config=self.config):
                 self._snapshots.append(path)
         except Exception as error:  # цртање никад не обара тренинг
             self._write(f"  ── снимак генерације {record.generation} није успео: {error}")

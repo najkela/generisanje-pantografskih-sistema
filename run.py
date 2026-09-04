@@ -10,6 +10,7 @@
 """
 
 import argparse
+import dataclasses
 import json
 import os
 import platform
@@ -106,6 +107,10 @@ def run_experiment(args: argparse.Namespace) -> None:
         raise NotImplementedError(f"метод „{args.method}” још није имплементиран")
 
     config = QUICK_CONFIG if args.quick else DEFAULT_CONFIG
+    if args.max_link_ratio is not None:
+        # Config је frozen — вредност се уводи преко dataclasses.replace (PROMPT_ITERACIJA
+        # целина В). Подразумевано (None) значи: узми вредност из профила без измене.
+        config = dataclasses.replace(config, max_link_to_radius_ratio=args.max_link_ratio)
     budget = args.budget if args.budget is not None else config.total_budget
     population = args.population if args.population is not None else config.population_size
 
@@ -122,6 +127,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         log_every=args.log_every,
         snapshot_every=args.snapshot_every,
         snapshot_n=720,
+        config=config,
     )
     reporter.start(
         method=args.method,
@@ -185,7 +191,8 @@ def run_experiment(args: argparse.Namespace) -> None:
 
     command = (
         f"python run.py run --method {args.method} --curve {args.curve} "
-        f"--seed {args.seed} --budget {budget} --population {population}"
+        f"--seed {args.seed} --budget {budget} --population {population} "
+        f"--max-link-ratio {config.max_link_to_radius_ratio}"
         + (" --quick" if args.quick else "")
         + (f" --log-every {args.log_every}" if args.log_every != 1 else "")
         + (f" --snapshot-every {args.snapshot_every}" if args.snapshot_every else "")
@@ -283,6 +290,9 @@ def parse_args() -> argparse.Namespace:
                         help="испиши сваку K-ту генерацију у конзоли (подразумевано све)")
     run_p.add_argument("--snapshot-every", type=int, default=0,
                         help="сними PNG најбоље јединке сваких K генерација (0 = искључено)")
+    run_p.add_argument("--max-link-ratio", type=float, default=None,
+                        help="горња граница односа largest_link/path_radius; подразумевано "
+                             "из профила (5.0 у DEFAULT_CONFIG, DECISIONS §18/§20)")
 
     show_p = sub.add_parser("show", help="прикажи сачувано покретање без поновног тренирања")
     show_p.add_argument("run_dir", help="фолдер покретања (нпр. results/latest)")

@@ -21,7 +21,7 @@ from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 
 from .config import Config, DEFAULT_CONFIG
-from .curve import TargetCurve
+from .curve import TargetCurve, apply_similarity_transform, center_and_radius, place_on_target
 from .genome import CRANK, FIXED_A, FIXED_B, Genome, link_lengths, tracer
 from .simulator import branch_signs, positions_at, simulate
 from .validation import InvalidTopology, solving_order, validate
@@ -114,29 +114,55 @@ def snapshot(
     save: str,
     title: str = "",
     n: int = 720,
+    config: Config = DEFAULT_CONFIG,
 ) -> bool:
-    """Један PNG: механизам у θ = 0 + путања трагача преко циљне криве.
+    """Један PNG: механизам + путања трагача, постављени на циљну криву (DECISIONS §17, §20).
 
     Црта се на фиксном `n` (подразумевано највећи из распореда), без обзира на тренутну
     резолуцију претраге — слика тако изгледа глатко и рано у тренингу, а не кошта ништа
     јер није позив који се броји.
 
-    Враћа `True` ако је слика снимљена. `False` значи да јединка у том тренутку није
-    решива (неважећа топологија или circuit defect) — слика се свеједно снима, са
-    механизмом и напоменом уместо путање, јер је и то информација вредна гледања.
+    Пуна скална инваријантност фитнеса (02.09.) пореди путању тек ПОСЛЕ нормализације, па се
+    сирова путања у координатама механизма и нормализована циљна крива налазе на различитим
+    местима и у различитим размерама — слика без корекције изгледа лоше и кад је јединка
+    добра. Овде се примењује ИСТА сличносна трансформација коју `run.py` примењује на крају
+    покретања: `place_on_target` на путањи, `apply_similarity_transform` на координатама и на
+    путањи (еквивалентно, README 1.5) — цртају се постављени механизам и путања.
+
+    РАДИ НА КОПИЈИ ГЕНОМА. Позивалац (`progress.ProgressReporter._snapshot`) прослеђује живи
+    геном из популације — измена координата на месту би тихо покварила претрагу. Ниједан
+    позив овде не сме мутирати `genome.coords`.
+
+    Постављање се прескаче (црта се некоригована сирова путања, уз напомену на слици) ако је
+    полупречник путање ~0 (дегенерисана путања) или ако `tracer_path` врати `None`
+    (неважећа топологија или circuit defect) — цртање и даље не сме да обори тренинг.
+
+    Враћа `True` ако је слика снимљена са решивом путањом (постављеном или не).
     """
-    path = tracer_path(genome, n)
+    positioned = Genome(topology=genome.topology.copy(), coords=genome.coords.copy())
+    path = tracer_path(positioned, n, config)
+    placed = False
+    if path is not None:
+        _center, radius = center_and_radius(path)
+        if radius >= 1e-9:
+            tx, ty, angle, scale = place_on_target(path)
+            positioned.coords = apply_similarity_transform(positioned.coords, tx, ty, angle, scale)
+            path = apply_similarity_transform(path, tx, ty, angle, scale)
+            placed = True
 
     def draw(ax):
         ax.plot(target.points[:, 0], target.points[:, 1], "-", **TARGET_STYLE)
         if path is not None:
             ax.plot(path[:, 0], path[:, 1], "-", **PATH_STYLE)
-        draw_mechanism(ax, genome)
-        _fit_axes(ax, target.points, path, genome.coords)
+        draw_mechanism(ax, positioned)
+        _fit_axes(ax, target.points, path, positioned.coords)
         ax.set_title(title or "Најбоља јединка", fontsize=10)
         ax.legend(loc="upper right", fontsize=8)
         if path is None:
             ax.text(0.02, 0.02, "јединка није решива (circuit defect)",
+                    transform=ax.transAxes, color="tab:red", fontsize=9)
+        elif not placed:
+            ax.text(0.02, 0.02, "путања дегенерисана (радијус ~0) — некоригована поза",
                     transform=ax.transAxes, color="tab:red", fontsize=9)
 
     _render(draw, save)
