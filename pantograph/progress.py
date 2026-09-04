@@ -114,8 +114,17 @@ class ProgressReporter:
             ("буџет", f"{_thousands(self.total_budget)} позива симулатора"),
             ("распоред N", " → ".join(str(n) for n in n_schedule)),
             ("гломазност ≤", f"{self.config.max_link_to_radius_ratio:.2f}× (largest_link/path_radius)"),
-            ("git commit", (git_commit or "непознат")[:12]),
         ]
+        if method == "bilevel":
+            # K режим унутрашњег ЦМА-ЕС-а (PROMPT_BILEVEL целина Г) — динамички (плато) или
+            # фиксан (H3, референтне 5/15/40); величина спољашње популације је већ горе,
+            # исти број као `config.outer_population` (run.py је то тако проследио).
+            k_mode = (
+                f"фиксно K={self.config.fixed_k}" if self.config.fixed_k is not None
+                else f"динамички (плато, K ≤ {self.config.k_max})"
+            )
+            rows.append(("K режим", k_mode))
+        rows.append(("git commit", (git_commit or "непознат")[:12]))
         if self.run_dir:
             rows.append(("фолдер", self.run_dir))
         rows.append((

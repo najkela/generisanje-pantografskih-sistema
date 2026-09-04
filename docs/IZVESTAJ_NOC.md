@@ -69,7 +69,19 @@ _(попуњава се)_
 
 ## Целина Г — run.py
 
-_(попуњава се)_
+- Урађено: `--method bilevel` више не диже `NotImplementedError`, позива `bilevel.outer_ga`
+  истим током (репортер, сличносна трансформација, `log.save`, слике, `command.txt`).
+  Нови аргументи `--outer-population`, `--k-max`, `--fixed-k` — сви резолвовани у
+  `command.txt` (исти образац као `--max-link-ratio`, §20). `progress.ProgressReporter.start`
+  добија ред „K режим" кад је метод bilevel (динамички ≤K или фиксно K).
+  `--population` остаје баскелине-специфичан; bilevel чита `--outer-population`, са
+  падом уназад на `--population` ако је прослеђен, па на профил.
+- Ручно тестирано преко CLI: `python run.py run --method bilevel --curve
+  data/curves/ellipse.txt --seed 1 --quick` — 6 генерација, 4s, коначна грешка
+  1.16e-03, сви фајлови (`log.json`, `best_genome.json`, слике, `command.txt`) исправно
+  снимљени, заглавље приказује „K режим динамички (плато, K ≤ 15)".
+- pytest (цео пакет): пролази.
+- Комит: у току.
 
 ## Целина Д — регресија baseline-a
 

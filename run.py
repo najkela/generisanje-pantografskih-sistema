@@ -19,6 +19,7 @@ from datetime import datetime
 import numpy as np
 
 from pantograph.baseline import evolve
+from pantograph.bilevel import outer_ga
 from pantograph.config import DEFAULT_CONFIG, QUICK_CONFIG
 from pantograph.curve import TargetCurve, apply_similarity_transform, place_on_target
 from pantograph.experiment import (
@@ -97,22 +98,33 @@ def _write_command_file(run_dir: str, command: str, curve: str) -> None:
 
 
 def run_experiment(args: argparse.Namespace) -> None:
-    """Покреће baseline ГА до краја (README 3.3, BASELINE_SPEC §9) и снима резултат у
-    фолдер по покретању (козметика 31.08.): `log.json`, `best_genome.json`,
-    `error_curve.png`, `best_path.png`, `mechanism.png`, `snapshots/`, `command.txt`.
-
-    `bilevel` остаје `NotImplementedError` — `bilevel.py` још не постоји.
+    """Покреће baseline ГА или bilevel до краја (README 3.3, BASELINE_SPEC §9;
+    bilevel: DECISIONS §22) и снима резултат у фолдер по покретању (козметика 31.08.):
+    `log.json`, `best_genome.json`, `error_curve.png`, `best_path.png`, `mechanism.png`,
+    `snapshots/`, `command.txt`.
     """
-    if args.method != "baseline":
-        raise NotImplementedError(f"метод „{args.method}” још није имплементиран")
-
     config = QUICK_CONFIG if args.quick else DEFAULT_CONFIG
     if args.max_link_ratio is not None:
         # Config је frozen — вредност се уводи преко dataclasses.replace (PROMPT_ITERACIJA
         # целина В). Подразумевано (None) значи: узми вредност из профила без измене.
         config = dataclasses.replace(config, max_link_to_radius_ratio=args.max_link_ratio)
     budget = args.budget if args.budget is not None else config.total_budget
-    population = args.population if args.population is not None else config.population_size
+
+    if args.method == "bilevel":
+        # Спољашња популација — `--outer-population` или (компатибилно са baseline-ом)
+        # `--population`; подразумевано из профила (PROMPT_BILEVEL целина Г).
+        population = (
+            args.outer_population if args.outer_population is not None
+            else args.population if args.population is not None
+            else config.outer_population
+        )
+        config = dataclasses.replace(config, outer_population=population, total_budget=budget)
+        if args.k_max is not None:
+            config = dataclasses.replace(config, k_max=args.k_max)
+        if args.fixed_k is not None:
+            config = dataclasses.replace(config, fixed_k=args.fixed_k)
+    else:
+        population = args.population if args.population is not None else config.population_size
 
     target = TargetCurve.from_file(args.curve)
 
@@ -138,14 +150,23 @@ def run_experiment(args: argparse.Namespace) -> None:
         profile="quick" if args.quick else "",
     )
 
-    log = evolve(
-        target,
-        budget=budget,
-        seed=args.seed,
-        population_size=population,
-        config=config,
-        reporter=reporter,
-    )
+    if args.method == "baseline":
+        log = evolve(
+            target,
+            budget=budget,
+            seed=args.seed,
+            population_size=population,
+            config=config,
+            reporter=reporter,
+        )
+    else:
+        log = outer_ga(
+            target,
+            budget=budget,
+            seed=args.seed,
+            config=config,
+            reporter=reporter,
+        )
 
     # Сличносна трансформација (README 1.5, DECISIONS §17) — ОДМАХ после `evolve`, ПРЕ
     # репортера: `reporter.final_snapshot`/`finish` и снимци читају `log.best_genome`, па
@@ -197,6 +218,13 @@ def run_experiment(args: argparse.Namespace) -> None:
         + (f" --log-every {args.log_every}" if args.log_every != 1 else "")
         + (f" --snapshot-every {args.snapshot_every}" if args.snapshot_every else "")
     )
+    if args.method == "bilevel":
+        # Резолвоване вредности, увек уписане — исти образац као `--max-link-ratio`
+        # (DECISIONS §20): из самог `command.txt` мора да се види под којим K режимом је
+        # покретање стварно рађено, не само шта је корисник тражио на командној линији.
+        command += f" --outer-population {population} --k-max {config.k_max}"
+        if config.fixed_k is not None:
+            command += f" --fixed-k {config.fixed_k}"
     _write_command_file(run_dir, command, args.curve)
     _update_latest_link(args.out, run_dir)
 
@@ -293,6 +321,16 @@ def parse_args() -> argparse.Namespace:
     run_p.add_argument("--max-link-ratio", type=float, default=None,
                         help="горња граница односа largest_link/path_radius; подразумевано "
                              "из профила (5.0 у DEFAULT_CONFIG, DECISIONS §18/§20)")
+    run_p.add_argument("--outer-population", type=int, default=None,
+                        help="величина спољашње популације топологија (само bilevel); "
+                             "подразумевано из профила (DECISIONS §22)")
+    run_p.add_argument("--k-max", type=int, default=None,
+                        help="горња граница итерација унутрашњег ЦМА-ЕС-а по топологији "
+                             "(само bilevel, динамички K); подразумевано из профила")
+    run_p.add_argument("--fixed-k", type=int, default=None,
+                        help="фиксан број итерација унутрашњег ЦМА-ЕС-а, игнорише плато "
+                             "(само bilevel, H3 — референтне вредности 5/15/40); "
+                             "подразумевано None = динамички K")
 
     show_p = sub.add_parser("show", help="прикажи сачувано покретање без поновног тренирања")
     show_p.add_argument("run_dir", help="фолдер покретања (нпр. results/latest)")
