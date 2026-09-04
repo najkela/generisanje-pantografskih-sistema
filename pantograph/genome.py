@@ -106,6 +106,24 @@ class Sequence:
     genes: list[SequenceGene]
 
 
+@dataclass
+class TopologySkeleton:
+    """Дискретни скелет секвенце за bilevel: исто као `Sequence`, без `ρ` (DECISIONS §22).
+
+    `genes` су торке `(a, b, s)` — позиције ослонаца у секвенци (исте конвенције као
+    `SequenceGene.a`/`.b`) и закуцан знак гране. Знак је дискретан ген топологије, не
+    последица тренутне геометрије (§17) — зато живи овде, а не у континуалном вектору
+    геометрије (`pantograph/geometry_vector.py`).
+    """
+
+    n_nodes: int
+    genes: list[tuple[int, int, int]]
+
+    def copy(self) -> "TopologySkeleton":
+        """Дубока копија — исти разлог као `Topology.copy`."""
+        return TopologySkeleton(n_nodes=self.n_nodes, genes=list(self.genes))
+
+
 def to_sequence(topology: Topology, coords: np.ndarray) -> Sequence:
     """Канонизује геном у секвенцу склапања преко BFS solving order-а (README 1.2.1).
 

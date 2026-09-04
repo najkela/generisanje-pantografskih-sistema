@@ -18,7 +18,17 @@ _(попуњава се)_
 
 ## Целина Б — pantograph/geometry_vector.py
 
-_(попуњава се)_
+- Урађено: `genome.TopologySkeleton` (n_nodes + genes без ρ), `geometry_vector.py` са
+  `skeleton_of`, `active_positions` (предачко стабло директно из скелета, без
+  `prune_dead_nodes`), `to_x`, `to_sequence_from_x`, `evaluate_vector` (једина капија ка
+  фитнесу, тачно један инкремент бројача по позиву — и на путу `from_sequence is None`,
+  и на путу `fitness.evaluate`).
+- `tests/test_geometry_vector.py`, 4 теста из промпта: round-trip 1e-12, димензија 2n−2 без
+  мртвог терета, мртав чвор из `add_node` начина Б (димензија −2, `evaluate_vector` на
+  мутираном == `fitness.evaluate` на оригиналном — путања се не мења), бројач тачно k за k
+  позива (валидни и намерно поломљени вектори). Сва четири прошла из прве.
+- pytest: цео пакет пролази.
+- Комит: у току.
 
 ## Целина В — pantograph/bilevel.py
 
