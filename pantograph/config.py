@@ -66,6 +66,26 @@ class Config:
     plateau_window_stop: int = 30        # генерација, за заустављање на N=720
     plateau_eps_stop: float = 0.001
 
+    # --- bilevel (DECISIONS §22) — не утичу ни на један параметар baseline-а изнад ------
+
+    outer_population: int = 20           # величина спољашње популације топологија
+    cma_lambda: int | None = None        # None → подразумевано из `cma` (4 + 3·ln d)
+    # Почетна ширина нових димензија при warm-start-у (§22 А4) — исти ред величине као
+    # `cma_stds_gene`, нешто шире јер нова геометрија нема родитељски контекст.
+    cma_sigma0_new: float = 0.3
+    cma_rho_lower: float = 0.05          # доња граница ρ димензија (В2)
+    cma_rho_upper: float = 20.0          # горња граница ρ димензија (В2)
+    # Почетне ширине по координати за СВЕЖ ЦМА-ЕС (В4) — образложење: чвор 1 (q1) се
+    # иницијализује из U(-1.5,1.5)², ручица (q2) на U(0.2,0.8) од чвора 0, а ρ живе око
+    # U(0.7,1.3) — ширине прате те распоне (README 4.1).
+    cma_stds_q1: tuple[float, float] = (0.6, 0.6)
+    cma_stds_q2: tuple[float, float] = (0.3, 0.3)
+    cma_stds_gene: tuple[float, float] = (0.15, 0.15)
+    plateau_window_k: int = 10           # прозор плато-детекције УНУТАР ЦМА-ЕС рана (динамички K)
+    plateau_eps_k: float = 0.01
+    k_max: int = 200                     # горња граница итерација ЦМА-ЕС по процени топологије
+    fixed_k: int | None = None           # ако постављено, игнорише плато — референтне 5/15/40 (H3)
+
 
 DEFAULT_CONFIG = Config()
 
@@ -80,4 +100,9 @@ QUICK_CONFIG = Config(
     total_budget=3_000,          # ≈100 генерација
     plateau_window_grow=5,
     plateau_window_stop=12,
+    # bilevel-део профила (PROMPT_BILEVEL целина Г) — мања спољашња популација и краћи
+    # унутрашњи плато-прозор, да `--quick` покретање стане у минут као и baseline-ов.
+    outer_population=8,
+    plateau_window_k=4,
+    k_max=15,
 )

@@ -182,10 +182,15 @@ def add_node(
     raise ValueError(f"Непознат mode: {mode!r} — очекивано 'A' или 'B'.")
 
 
-def delete_node(
+def delete_node_with_target(
     topology: Topology, coords: np.ndarray, rng: np.random.Generator
-) -> tuple[Topology, np.ndarray]:
-    """Брише чвор са позиције бране равномерно из {3, ..., n-1}; захтева n >= 5.
+) -> tuple[Topology, np.ndarray, int]:
+    """Као `delete_node`, али ВРАЋА и обрисану позицију `u` — потребно bilevel-у
+    (`pantograph/bilevel.py::_abs_map_delete_node`, DECISIONS §22, В3) да изгради мапу
+    димензија родитељ→дете за warm-start. `delete_node` је тањи омотач око ове функције;
+    ово је чиста ЕКСТРАКЦИЈА, понашање и потрошња `rng`-а су НЕПРОМЕЊЕНИ.
+
+    Брише чвор са позиције бране равномерно из {3, ..., n-1}; захтева n >= 5.
 
     Зависници обрисаног чвора преспајају се на преостали ослонац (BASELINE_SPEC §4.3);
     сви остали чворови задржавају позицију у θ=0 — мења се кретање, не почетни облик.
@@ -225,6 +230,18 @@ def delete_node(
     new_edges = [(reindex(x), reindex(y)) for x, y in kept_edges]
     new_coords = np.delete(coords, u, axis=0)
     new_topology = Topology(n_nodes=n - 1, edges=new_edges)
+    return new_topology, new_coords, u
+
+
+def delete_node(
+    topology: Topology, coords: np.ndarray, rng: np.random.Generator
+) -> tuple[Topology, np.ndarray]:
+    """Брише чвор са позиције бране равномерно из {3, ..., n-1}; захтева n >= 5.
+
+    Тањи омотач око `delete_node_with_target` — потпис и понашање непромењени од 30.08.
+    (baseline и даље не зна ништа о обрисаној позицији, само bilevel-у треба).
+    """
+    new_topology, new_coords, _u = delete_node_with_target(topology, coords, rng)
     return new_topology, new_coords
 
 

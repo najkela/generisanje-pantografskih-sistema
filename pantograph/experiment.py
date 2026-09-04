@@ -245,16 +245,19 @@ def make_rng(seed: int) -> np.random.Generator:
     raise NotImplementedError
 
 
-def spawn_rng_streams(
-    seed: int,
-) -> tuple[np.random.Generator, np.random.Generator, np.random.Generator, np.random.Generator]:
-    """Четири независна RNG тока из једног главног seed-а (BASELINE_SPEC §9).
+def spawn_rng_streams(seed: int, n_streams: int = 4) -> tuple[np.random.Generator, ...]:
+    """`n_streams` независних RNG токова из једног главног seed-а (BASELINE_SPEC §9).
 
-    `rng_init` — иницијализација популације; `rng_select` — селекција родитеља;
-    `rng_cross` — избор реза при укрштању; `rng_mut` — избор оператора, ослонаца, alpha,
-    rho, s, gene-wise новчићи (в. `baseline.evolve_generation`, план 31.08. питање 4).
+    Baseline позива без аргумента и добија четири тока: `rng_init` — иницијализација
+    популације; `rng_select` — селекција родитеља; `rng_cross` — избор реза при укрштању;
+    `rng_mut` — избор оператора, ослонаца, alpha, rho, s, gene-wise новчићи (в.
+    `baseline.evolve_generation`, план 31.08. питање 4).
+
+    Bilevel зове са `n_streams=5` и узима пети ток као `rng_cma` (DECISIONS §22, В5) —
+    `SeedSequence.spawn` је детерминистичка по редном броју детета, па прва четири тока
+    остају бит-идентична без обзира на `n_streams` (регресиони тест, PROMPT_BILEVEL целина Д).
     """
-    streams = np.random.SeedSequence(seed).spawn(4)
+    streams = np.random.SeedSequence(seed).spawn(n_streams)
     return tuple(np.random.default_rng(s) for s in streams)
 
 
