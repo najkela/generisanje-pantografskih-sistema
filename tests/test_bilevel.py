@@ -71,10 +71,10 @@ def test_inner_cmaes_strictly_decreases_fitness():
     )
 
     budget = Budget(max_calls=100_000)
-    rng_cma = np.random.default_rng(0)
+    record.rng = np.random.default_rng(0)
     config = dataclasses.replace(DEFAULT_CONFIG, fixed_k=20)
 
-    bilevel.inner_cmaes(record, target, 90, budget, config, rng_cma)
+    bilevel.inner_cmaes(record, target, 90, budget, config)
 
     assert record.best_fitness < initial_score
 
@@ -88,17 +88,18 @@ def test_inner_cmaes_spent_budget_equals_evaluated_candidates():
     record = _make_record(topology, coords)
 
     budget = Budget(max_calls=7)  # мање од величине популације ЦМА-ЕС-а по default-у
-    rng_cma = np.random.default_rng(1)
+    record.rng = np.random.default_rng(1)
 
-    bilevel.inner_cmaes(record, target, 90, budget, DEFAULT_CONFIG, rng_cma)
+    bilevel.inner_cmaes(record, target, 90, budget, DEFAULT_CONFIG)
 
     assert budget.spent == 7
 
 
 def test_outer_ga_same_seed_gives_bit_identical_run_log():
     """Иста семена → бит-идентичан `RunLog` (два узастопна `outer_ga`-а са истим seed-ом,
-    Ђ.3). `cma` вуче узорке из legacy `numpy.random` глобалног стања — изолација преко
-    `TopologyRecord.rng_state` (в. `bilevel._ask_isolated`) мора то да сакрије."""
+    Ђ.3). `cma` вуче узорке директно из `record.rng`, позиционог тока
+    `cma_rng(seed, generation, slot)` (DECISIONS §24, В2) — детерминизам не сме да зависи
+    од редоследа позива над ДРУГИМ записима, само од сопствене позиције."""
     target = _circle_target()
     config = dataclasses.replace(
         DEFAULT_CONFIG, outer_population=6, total_budget=500, k_max=6, plateau_window_k=3,
@@ -177,9 +178,9 @@ def test_warm_start_after_add_node_a_has_two_more_dimensions():
     parent_record = _make_record(topology, coords)
 
     budget = Budget(max_calls=100_000)
-    rng_cma = np.random.default_rng(5)
+    parent_record.rng = np.random.default_rng(5)
     config = dataclasses.replace(DEFAULT_CONFIG, fixed_k=3)
-    bilevel.inner_cmaes(parent_record, target, 90, budget, config, rng_cma)
+    bilevel.inner_cmaes(parent_record, target, 90, budget, config)
 
     parent_seq = to_sequence_from_x(
         parent_record.best_x, parent_record.skeleton, parent_record.frozen_rho, parent_record.active
@@ -215,10 +216,9 @@ def test_rho_out_of_bounds_becomes_invalid_record_without_clipping():
 
     budget = Budget(max_calls=100_000)
     log = RunLog(method="bilevel", curve="", seed=0)
-    rng_cma = np.random.default_rng(0)
     target = _circle_target()
 
-    bilevel.inner_cmaes(record, target, 90, budget, DEFAULT_CONFIG, rng_cma, log)
+    bilevel.inner_cmaes(record, target, 90, budget, DEFAULT_CONFIG, log)
 
     assert budget.spent == 1
     assert log.rho_out_of_bounds == 1

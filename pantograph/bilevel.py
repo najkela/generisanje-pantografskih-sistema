@@ -46,15 +46,20 @@ if TYPE_CHECKING:
 
 @dataclass
 class TopologyRecord:
-    """Стање једне топологије кроз генерације спољашњег ГА (DECISIONS §22, А3, В1).
+    """Стање једне топологије кроз генерације спољашњег ГА (DECISIONS §22, А3; §24, В1/В2).
 
-    `skeleton is None` означава мртав запис (невалидна тополошка мутација, А6) — нема
-    ЦМА-ЕС, нема геометрију, преживи само као казна до прве селекције. `es` се гради
-    ЛЕЊО, при ПРВОМ позиву `inner_cmaes` (В2) — `init_x0`/`init_stds`/`init_sigma0` носе
-    warm-start резултат (В3) до тог тренутка. `rng_state` изолује `cma`-ин ослонац на
-    legacy `numpy.random` глобално стање (в. `_ask_isolated`) — без овога би резултат
-    зависио од редоследа позива над ДРУГИМ записима, не само од сопственог seed-а
-    (упозорење из PROMPT_BILEVEL целина Ђ.3).
+    `skeleton is None` означава мртав запис (невалидна тополошка мутација, А6, или ρ ван
+    граница) — нема ЦМА-ЕС, нема геометрију, преживи само као казна до прве селекције.
+    `es` се гради ЛЕЊО, при ПРВОМ позиву `inner_cmaes` (В2) — `init_x0`/`init_stds`/
+    `init_sigma0` носе warm-start резултат (В3) до тог тренутка.
+
+    `rng` је позициони РНГ ток (DECISIONS §24, В2) — `outer_ga` га додељује изнова на
+    почетку СВАКЕ спољашње генерације, пре позива `inner_cmaes`
+    (`record.rng = cma_rng(seed, generation, slot)`), зависно само од `(seed, generation,
+    slot)`, не од историје записа. `es.opts['randn']` (в. `_construct_cma_es`) референцира
+    `record.rng` преко closure-a над самим записом (не над вредношћу узетом у тренутку
+    конструкције) — `es` живи кроз генерације непромењен (А3), а промена `record.rng`
+    између генерација сама по себи мења одакле долазе нормале, без обнове `es` објекта.
     """
 
     skeleton: TopologySkeleton | None
@@ -64,7 +69,7 @@ class TopologyRecord:
     init_stds: np.ndarray | None = None
     init_sigma0: float = 1.0
     es: "cma.CMAEvolutionStrategy | None" = None
-    rng_state: tuple | None = None
+    rng: np.random.Generator | None = None
     best_x: np.ndarray | None = None
     best_fitness: float = float("inf")
     history: list[float] = field(default_factory=list)
@@ -112,15 +117,22 @@ def _initial_stds(n_genes: int, config: Config) -> np.ndarray:
 # --- унутрашњи ниво: ЦМА-ЕС над геометријом фиксне топологије (В2) ----------------------
 
 
-def _construct_cma_es(
-    x0: np.ndarray, stds: np.ndarray, sigma0: float, config: Config, seed: int
-) -> tuple["cma.CMAEvolutionStrategy", tuple]:
-    """Гради `cma.CMAEvolutionStrategy` са опцијама из В2 — `bounds` за `ρ` димензије
-    `[config.cma_rho_lower, config.cma_rho_upper]`, језгро неограничено, `verbose: -9`
-    (испис искључиво кроз `ProgressReporter`). Изолује `cma`-ин legacy `numpy.random`
-    ослонац: конструкција привремено мења глобално стање (опција `seed`), па се чува и
-    враћа стање позиваоца, а НОВО стање (после конструкције) се враћа као `rng_state` да
-    `_ask_isolated` од њега настави.
+def _construct_cma_es(record: TopologyRecord, config: Config) -> "cma.CMAEvolutionStrategy":
+    """Гради `cma.CMAEvolutionStrategy` из `record.init_x0`/`init_stds`/`init_sigma0`, са
+    опцијама из В2 — `bounds` за `ρ` димензије `[config.cma_rho_lower, config.cma_rho_upper]`,
+    језгро неограничено, `verbose: -9` (испис искључиво кроз `ProgressReporter`).
+
+    РНГ (DECISIONS §24, В1): `cma` (верзија 4.4.4) вуче узорке искључиво преко
+    `self.randn` у `sampler.py`, не преко приватног генератора — упркос томе што прима
+    опцију `seed` (документовано на `evolution_strategy.py:1101`: `seed` се користи само
+    док је `opts['randn'] is np.random.randn`). Овде је `opts['randn']` затварање над
+    самим записом (`record.rng.standard_normal`, облик тачно `(lam, N)` — проверено у
+    `sampler.py`), не над тренутном вредношћу `record.rng` — исти `es` објекат живи кроз
+    генерације (А3), а `record.rng` се мења сваке генерације (в. `TopologyRecord`), па
+    затварање мора да гледа атрибут записа, не ухваћену променљиву. `opts['seed'] = np.nan`
+    гаси упозорење библиотеке о неупотребљеном `seed`-у (`utils.is_nan` враћа `True`, цео
+    `if`-блок који и упозорава и позива `np.random.seed` се прескаче) — нема више
+    снимања/враћања `np.random.get_state()`, конструкција не дира legacy глобално стање.
 
     Диже `RhoOutOfBounds` ако нека `ρ` димензија почетне тачке испадне ВАН
     `[cma_rho_lower, cma_rho_upper]` (нпр. после `delete_node` преспајања зависника,
@@ -129,43 +141,26 @@ def _construct_cma_es(
     креће близу родитеља" тиме што је тихо мењао геометрију коју је оператор произвео).
     Позивалац (`inner_cmaes`) овакав случај третира као невалидну мутацију.
     """
+    x0 = record.init_x0
     n_gene_dims = len(x0) - 4
     for v in x0[4:]:
         if not (config.cma_rho_lower <= v <= config.cma_rho_upper):
             raise RhoOutOfBounds(f"ρ={v} ван [{config.cma_rho_lower}, {config.cma_rho_upper}]")
 
-    saved = np.random.get_state()
-    try:
-        lower = [None, None, None, None] + [config.cma_rho_lower] * n_gene_dims
-        upper = [None, None, None, None] + [config.cma_rho_upper] * n_gene_dims
-        opts = {
-            "CMA_stds": [float(v) for v in stds],
-            "bounds": [lower, upper],
-            "verbose": -9,
-            "verb_log": 0,
-            "verb_disp": 0,
-            "seed": seed,
-        }
-        if config.cma_lambda is not None:
-            opts["popsize"] = config.cma_lambda
-        es = cma.CMAEvolutionStrategy(list(x0), sigma0, opts)
-        rng_state = np.random.get_state()
-    finally:
-        np.random.set_state(saved)
-    return es, rng_state
-
-
-def _ask_isolated(record: TopologyRecord) -> list[np.ndarray]:
-    """`record.es.ask()` изолован од legacy `numpy.random` глобалног стања — `cma` узорке
-    вуче директно из њега (докстринг класе `TopologyRecord`), не из сопственог генератора."""
-    saved = np.random.get_state()
-    try:
-        np.random.set_state(record.rng_state)
-        candidates = record.es.ask()
-        record.rng_state = np.random.get_state()
-    finally:
-        np.random.set_state(saved)
-    return candidates
+    lower = [None, None, None, None] + [config.cma_rho_lower] * n_gene_dims
+    upper = [None, None, None, None] + [config.cma_rho_upper] * n_gene_dims
+    opts = {
+        "CMA_stds": [float(v) for v in record.init_stds],
+        "bounds": [lower, upper],
+        "verbose": -9,
+        "verb_log": 0,
+        "verb_disp": 0,
+        "randn": lambda lam, n: record.rng.standard_normal((lam, n)),
+        "seed": np.nan,
+    }
+    if config.cma_lambda is not None:
+        opts["popsize"] = config.cma_lambda
+    return cma.CMAEvolutionStrategy(list(x0), record.init_sigma0, opts)
 
 
 def _update_best(record: TopologyRecord, candidates: list[np.ndarray], scores: list[float]) -> None:
@@ -183,10 +178,13 @@ def inner_cmaes(
     n: int,
     budget: Budget,
     config: Config = DEFAULT_CONFIG,
-    rng_cma: np.random.Generator = None,
     log: RunLog | None = None,
 ) -> tuple[np.ndarray | None, float]:
     """ЦМА-ЕС над вектором геометрије `x` за фиксну топологију записа (README 2.3, В2).
+
+    Захтева да `record.rng` буде већ постављен (DECISIONS §24, В2) — позивалац
+    (`outer_ga`) га додељује пре сваког позива, `record.rng = cma_rng(seed, generation,
+    slot)`; директни тестови постављају ручно. Одавде се РНГ не сеје нити узима.
 
     Број итерација K је динамички — плато-детекција `experiment.plateau_detected` као
     early stopping, осим ако је `config.fixed_k` постављено (референтне 5/15/40, H3),
@@ -206,11 +204,8 @@ def inner_cmaes(
         return record.best_x, record.best_fitness  # мртав запис (А6) — нема шта да се ради
 
     if record.es is None:
-        seed = int(rng_cma.integers(0, 2**31 - 1))
         try:
-            record.es, record.rng_state = _construct_cma_es(
-                record.init_x0, record.init_stds, record.init_sigma0, config, seed
-            )
+            record.es = _construct_cma_es(record, config)
         except RhoOutOfBounds:
             budget.spend()
             if log is not None:
@@ -237,7 +232,7 @@ def inner_cmaes(
             if iterations > 0 and plateau_detected(record.history, config.plateau_window_k, config.plateau_eps_k):
                 break
 
-        candidates = _ask_isolated(record)
+        candidates = record.es.ask()
         scores: list[float] = []
         for x in candidates:
             if budget.exhausted:
@@ -381,6 +376,26 @@ def _mutate_topology(genome: Genome, config: Config, rng: np.random.Generator):
 
     new_topology, new_coords, u = delete_node_with_target(topology, coords, rng)
     return new_topology, new_coords, _abs_map_delete_node(n_parent, u), "delete"
+
+
+# --- позиционо семе унутрашњег ЦМА-ЕС-а (DECISIONS §24, В2) -----------------------------
+
+
+KLJUC_CMA = 5  # константа, да се не судари ни са чим другим изведеним из истог main seed-а
+
+
+def cma_rng(main_seed: int, generation: int, slot: int) -> np.random.Generator:
+    """РНГ ток за унутрашњи ЦМА-ЕС зависан САМО од позиције `(main_seed, generation, slot)`,
+    не од историје (DECISIONS §24, В2). `slot` је место записа у спољашњој популацији ТЕ
+    генерације — `outer_ga` овим замењује сваки `record.rng` на почетку сваке генерације,
+    пре позива `inner_cmaes`, па број потрошених нормала зависи само од тога где запис
+    седи у датој генерацији, не од тога колико је ЦМА-ЕС објеката створено пре њега
+    (спољашња популација, третман невалидне деце, `k_max` — ништа од тога више не помера
+    токове ДРУГИХ топологија). Ограничење које се не преувеличава: ово НЕ даје пуну
+    упоредивост кроз верзије кода — која топологија седи на ком месту зависи од селекције,
+    дакле од фитнеса. Уклања се тиха спрега, не постиже гаранција поновљивости.
+    """
+    return np.random.default_rng([main_seed, KLJUC_CMA, generation, slot])
 
 
 # --- спољашњи ниво (В5) ------------------------------------------------------------------
@@ -541,11 +556,13 @@ def outer_ga(
     (README 2.3, DECISIONS §22, В5). Троши стварно потрошен K по евалуацији (README 3.3).
 
     Огледа `baseline.evolve`: исти облик `RunLog`-а, иста плато-логика, исти распоред N.
-    RNG токови: `experiment.spawn_rng_streams(seed, n_streams=5)` — пети ток је `rng_cma`,
-    прва четири остају бит-идентична baseline-овим (В5).
+    RNG токови: `experiment.spawn_rng_streams(seed)` — исти четири тока као baseline
+    (В5). Унутрашњи ЦМА-ЕС НЕ дели ниједан од њих — сваки запис добија сопствени
+    позициони ток `cma_rng(seed, generation, slot)` на почетку сваке генерације, пре
+    `inner_cmaes` (DECISIONS §24, В2).
     """
     run_config = dataclasses.replace(config, total_budget=budget)
-    rng_init, rng_select, _rng_cross, rng_mut, rng_cma = spawn_rng_streams(seed, n_streams=5)
+    rng_init, rng_select, _rng_cross, rng_mut = spawn_rng_streams(seed)
     budget_tracker = Budget(max_calls=budget)
 
     log = RunLog(
@@ -583,12 +600,13 @@ def outer_ga(
                 record.history = []
         previous_n_curve = n_curve
 
-        for record in population:
+        for slot, record in enumerate(population):
             if budget_tracker.exhausted:
                 break
             if record.skeleton is None:
                 continue  # мртав запис (А6) — нема шта да се оптимизује
-            inner_cmaes(record, target, n_curve, budget_tracker, run_config, rng_cma, log)
+            record.rng = cma_rng(seed, generation, slot)  # позиционо семе (§24, В2)
+            inner_cmaes(record, target, n_curve, budget_tracker, run_config, log)
 
         scores = np.array([r.best_fitness for r in population])
         best_index = int(np.argmin(scores))
