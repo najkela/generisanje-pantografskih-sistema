@@ -136,6 +136,10 @@ class RunLog:
     records: list[GenerationRecord] = field(default_factory=list)
     best_genome: Genome | None = None
     final_error: float = float("nan")
+    # Бројач: колико пута је почетна тачка ЦМА-ЕС-а имала `ρ` ван декларисаних граница
+    # (DECISIONS §24, А1) — bilevel-специфично, baseline га никад не увећава. Ако остаје 0
+    # кроз мерење, то потврђује да су границе добро постављене; ако није, види се одмах.
+    rho_out_of_bounds: int = 0
 
     @property
     def error_curve(self) -> list[tuple[int, float]]:
@@ -179,6 +183,7 @@ class RunLog:
             "git_commit": self.git_commit,
             "config": self.config,
             "final_error": self.final_error,
+            "rho_out_of_bounds": self.rho_out_of_bounds,
             "records": [asdict(r) for r in self.records],
             "best_genome": _genome_to_dict(self.best_genome) if self.best_genome is not None else None,
         }
@@ -212,6 +217,7 @@ class RunLog:
             records=records,
             best_genome=_genome_from_dict(data["best_genome"]) if data.get("best_genome") else None,
             final_error=data.get("final_error", float("nan")),
+            rho_out_of_bounds=data.get("rho_out_of_bounds", 0),
         )
 
 

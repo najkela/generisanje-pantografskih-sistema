@@ -9,7 +9,7 @@ from scipy.spatial import cKDTree
 from pantograph import bilevel
 from pantograph.config import DEFAULT_CONFIG
 from pantograph.curve import TargetCurve
-from pantograph.experiment import Budget
+from pantograph.experiment import Budget, RunLog
 from pantograph.genome import to_sequence
 from pantograph.geometry_vector import active_positions, evaluate_vector, skeleton_of, to_x
 from pantograph.operators import random_initial_genome
@@ -201,3 +201,30 @@ def test_warm_start_after_add_node_a_has_two_more_dimensions():
     assert sigma0 == 1.0
     assert np.allclose(x0[:d_parent], parent_record.best_x, atol=1e-9)
     assert np.allclose(stds[-2:], config.cma_sigma0_new)
+
+
+def test_rho_out_of_bounds_becomes_invalid_record_without_clipping():
+    """`ρ` намерно ван `[cma_rho_lower, cma_rho_upper]` → запис постаје невалидан:
+    буџет +1, `log.rho_out_of_bounds` +1, `record.es is None` — БЕЗ тихог clip-a почетне
+    тачке (DECISIONS §24, А1; PROMPT_RNG целина Б)."""
+    topology, coords = _random_genome_without_dead_weight(6, seed=4)
+    record = _make_record(topology, coords)
+
+    original_x0 = record.init_x0.copy()
+    record.init_x0[4] = DEFAULT_CONFIG.cma_rho_upper + 1.0  # намерно ван горње границе
+
+    budget = Budget(max_calls=100_000)
+    log = RunLog(method="bilevel", curve="", seed=0)
+    rng_cma = np.random.default_rng(0)
+    target = _circle_target()
+
+    bilevel.inner_cmaes(record, target, 90, budget, DEFAULT_CONFIG, rng_cma, log)
+
+    assert budget.spent == 1
+    assert log.rho_out_of_bounds == 1
+    assert record.es is None
+    assert record.skeleton is None
+    assert record.best_fitness == bilevel.PENALTY
+    # почетна тачка није тихо clip-ована — намерно постављена вредност остаје нетакнута
+    assert record.init_x0[4] == DEFAULT_CONFIG.cma_rho_upper + 1.0
+    assert record.init_x0[5:].tolist() == original_x0[5:].tolist()

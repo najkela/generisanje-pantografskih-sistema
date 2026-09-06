@@ -80,6 +80,15 @@ def _invalid_record() -> TopologyRecord:
     )
 
 
+class RhoOutOfBounds(Exception):
+    """`ρ` димензија почетне тачке ЦМА-ЕС-а ван `[cma_rho_lower, cma_rho_upper]`
+    (DECISIONS §24, А1). Не би смело да се деси код законитих оператора — границе су
+    05.09. проширене баш толико да их они не могу пробити — али граница мора да постоји и
+    мора нешто да се деси ако се ипак пробије. `inner_cmaes` овакав запис третира као
+    невалидну мутацију (§22 А6 продужено на нови узрок): наплаћује један позив, не гради
+    ЦМА-ЕС, не clip-ује тихо."""
+
+
 def _record_to_genome(record: TopologyRecord) -> Genome | None:
     """Реконструише `Genome` из `record.best_x` — `None` ако запис нема геометрију или
     ако реконструкција падне на circuit defect (изузетно редак: `best_x` већ потиче од
@@ -113,22 +122,22 @@ def _construct_cma_es(
     враћа стање позиваоца, а НОВО стање (после конструкције) се враћа као `rng_state` да
     `_ask_isolated` од њега настави.
 
-    Напомена (нађено при писању тестова, целина Ђ): `ρ` реконструисан из стварне
-    геометрије (нпр. после `delete_node` преспајања зависника) повремено испадне ВАН
-    `[cma_rho_lower, cma_rho_upper]` — `cma` тада одбија саму конструкцију (`geno()` на
-    почетној средини захтева тачку УНУТАР граница, диже `ValueError`). Промпт то не
-    покрива изричито; најбезбедније решење без одлагања за одобрење је `clip` почетне
-    тачке у декларисане границе пре конструкције — исте границе које смо већ увели, не
-    нове, а почетна тачка је свеједно само warm-start процена, не резултат.
+    Диже `RhoOutOfBounds` ако нека `ρ` димензија почетне тачке испадне ВАН
+    `[cma_rho_lower, cma_rho_upper]` (нпр. после `delete_node` преспајања зависника,
+    ретко) — НЕ clip-ује тихо (DECISIONS §24, А1: границе су проширене баш толико да их
+    законити оператори не могу пробити; clip је нарушавао warm-start оправдање „дете
+    креће близу родитеља" тиме што је тихо мењао геометрију коју је оператор произвео).
+    Позивалац (`inner_cmaes`) овакав случај третира као невалидну мутацију.
     """
+    n_gene_dims = len(x0) - 4
+    for v in x0[4:]:
+        if not (config.cma_rho_lower <= v <= config.cma_rho_upper):
+            raise RhoOutOfBounds(f"ρ={v} ван [{config.cma_rho_lower}, {config.cma_rho_upper}]")
+
     saved = np.random.get_state()
     try:
-        n_gene_dims = len(x0) - 4
         lower = [None, None, None, None] + [config.cma_rho_lower] * n_gene_dims
         upper = [None, None, None, None] + [config.cma_rho_upper] * n_gene_dims
-        x0_clipped = list(x0[:4]) + [
-            float(np.clip(v, config.cma_rho_lower, config.cma_rho_upper)) for v in x0[4:]
-        ]
         opts = {
             "CMA_stds": [float(v) for v in stds],
             "bounds": [lower, upper],
@@ -139,7 +148,7 @@ def _construct_cma_es(
         }
         if config.cma_lambda is not None:
             opts["popsize"] = config.cma_lambda
-        es = cma.CMAEvolutionStrategy(x0_clipped, sigma0, opts)
+        es = cma.CMAEvolutionStrategy(list(x0), sigma0, opts)
         rng_state = np.random.get_state()
     finally:
         np.random.set_state(saved)
@@ -175,6 +184,7 @@ def inner_cmaes(
     budget: Budget,
     config: Config = DEFAULT_CONFIG,
     rng_cma: np.random.Generator = None,
+    log: RunLog | None = None,
 ) -> tuple[np.ndarray | None, float]:
     """ЦМА-ЕС над вектором геометрије `x` за фиксну топологију записа (README 2.3, В2).
 
@@ -185,6 +195,11 @@ def inner_cmaes(
     `tell()`-а (cma не прима непотпуну листу) — већ оцењени кандидати ипак ажурирају
     `best_x`/`best_fitness`, ти позиви су стварно потрошени.
 
+    Ако почетна тачка има `ρ` ван граница (`RhoOutOfBounds`, DECISIONS §24 А1), запис
+    постаје мртав (исто третирање као невалидна тополошка мутација, §22 А6): наплаћује се
+    један позив, `log.rho_out_of_bounds` (ако је `log` прослеђен) се увећава за један,
+    ЦМА-ЕС се не гради. `record.init_x0` остаје нетакнут — не clip-ује се.
+
     Враћа `(record.best_x, record.best_fitness)` — исто стање остаје и на `record`.
     """
     if record.skeleton is None:
@@ -192,9 +207,20 @@ def inner_cmaes(
 
     if record.es is None:
         seed = int(rng_cma.integers(0, 2**31 - 1))
-        record.es, record.rng_state = _construct_cma_es(
-            record.init_x0, record.init_stds, record.init_sigma0, config, seed
-        )
+        try:
+            record.es, record.rng_state = _construct_cma_es(
+                record.init_x0, record.init_stds, record.init_sigma0, config, seed
+            )
+        except RhoOutOfBounds:
+            budget.spend()
+            if log is not None:
+                log.rho_out_of_bounds += 1
+            record.skeleton = None
+            record.frozen_rho = {}
+            record.active = []
+            record.best_x = None
+            record.best_fitness = PENALTY
+            return record.best_x, record.best_fitness
         if record.best_x is None:
             record.best_x = np.asarray(record.init_x0, dtype=float).copy()
 
@@ -562,7 +588,7 @@ def outer_ga(
                 break
             if record.skeleton is None:
                 continue  # мртав запис (А6) — нема шта да се оптимизује
-            inner_cmaes(record, target, n_curve, budget_tracker, run_config, rng_cma)
+            inner_cmaes(record, target, n_curve, budget_tracker, run_config, rng_cma, log)
 
         scores = np.array([r.best_fitness for r in population])
         best_index = int(np.argmin(scores))
