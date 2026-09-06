@@ -4,6 +4,7 @@ PROMPT_BILEVEL целина Ђ). Тестови су спецификација,
 import dataclasses
 
 import numpy as np
+from numpy.testing import assert_equal
 from scipy.spatial import cKDTree
 
 from pantograph import bilevel
@@ -228,3 +229,97 @@ def test_rho_out_of_bounds_becomes_invalid_record_without_clipping():
     # почетна тачка није тихо clip-ована — намерно постављена вредност остаје нетакнута
     assert record.init_x0[4] == DEFAULT_CONFIG.cma_rho_upper + 1.0
     assert record.init_x0[5:].tolist() == original_x0[5:].tolist()
+
+
+def test_outer_ga_full_run_log_bit_identical_across_repeats():
+    """Два узастопна `outer_ga`-а са истим seed-ом дају бит-идентичан `RunLog` У ЦЕЛИНИ —
+    сваки ред лога (`dataclasses.asdict`, `NaN` поља укључена), бројач
+    `rho_out_of_bounds`, топологија и координате најбоље јединке (PROMPT_RNG Д.1;
+    проширује `test_outer_ga_same_seed_gives_bit_identical_run_log` изнад)."""
+    target = _circle_target()
+    config = dataclasses.replace(
+        DEFAULT_CONFIG, outer_population=6, total_budget=500, k_max=6, plateau_window_k=3,
+    )
+
+    log1 = bilevel.outer_ga(target, budget=500, seed=11, config=config)
+    log2 = bilevel.outer_ga(target, budget=500, seed=11, config=config)
+
+    assert_equal(
+        [dataclasses.asdict(r) for r in log1.records],
+        [dataclasses.asdict(r) for r in log2.records],
+    )
+    assert log1.rho_out_of_bounds == log2.rho_out_of_bounds
+    assert log1.best_genome is not None and log2.best_genome is not None
+    assert log1.best_genome.topology.edges == log2.best_genome.topology.edges
+    assert np.array_equal(log1.best_genome.coords, log2.best_genome.coords)
+
+
+def test_outer_ga_isolated_from_global_numpy_random_state():
+    """КЉУЧНИ ТЕСТ — доказује измену В1. Два `outer_ga`-а истим seed-ом, али између њих
+    потрошен глобални `np.random` (`np.random.seed(12345); np.random.randn(1000)`) —
+    резултат МОРА остати бит-идентичан, јер `cma` узорке вуче искључиво из `record.rng`,
+    не из legacy глобалног стања (PROMPT_RNG Д.2).
+
+    НАЛАЗ (проверено при писању, 05.09.): под ПОДРАЗУМЕВАНИМ `config`-ом овај тест
+    пролази и на коду ПРЕ измене В1 — стари snapshot приступ (`np.random.get_state()`/
+    `set_state()` око конструкције и око `ask()`-а) је довољан ЈЕР `record.es.tell()`,
+    једини позив ван изолованог блока, под овим подешавањима (без TPA адаптације σ, без
+    целобројних променљивих, без стохастичког заокруживања) не вуче ниједан узорак
+    насумичности — тврдња „пре измене овај тест пада" из PROMPT_RNG Д.2 се НЕ
+    репродукује овде, в. `docs/IZVESTAJ_RNG.md`. Тест ипак остаје вредан: В1 уклања
+    целу категорију ризика (`tell()` позван ВАН snapshot-блока, па би укључивање било
+    које од те три опције тихо процурело кроз legacy стање) уместо да се ослања на то
+    да их пројекат тренутно не користи."""
+    target = _circle_target()
+    config = dataclasses.replace(
+        DEFAULT_CONFIG, outer_population=6, total_budget=500, k_max=6, plateau_window_k=3,
+    )
+
+    log1 = bilevel.outer_ga(target, budget=500, seed=7, config=config)
+
+    np.random.seed(12345)
+    np.random.randn(1000)
+
+    log2 = bilevel.outer_ga(target, budget=500, seed=7, config=config)
+
+    assert log1.final_error == log2.final_error
+    assert np.array_equal(log1.best_genome.coords, log2.best_genome.coords)
+
+
+def test_construct_cma_es_never_calls_np_random_seed(monkeypatch):
+    """`np.random.seed` се никад не позива при конструкцији унутрашњег ЦМА-ЕС-а (В1) —
+    семе долази искључиво преко `record.rng`; `opts['seed'] = np.nan` гаси библиотечко
+    упозорење а да га `cma` никад стварно не употреби (в. извор `cma` 4.4.4,
+    `evolution_strategy.py:1101`). `monkeypatch` дигне изузетак ако се позове — кратак
+    bilevel мора да прође без окидања (PROMPT_RNG Д.3)."""
+
+    def _raise(*args, **kwargs):
+        raise AssertionError("np.random.seed не сме да се позове (DECISIONS §24, В1)")
+
+    monkeypatch.setattr(np.random, "seed", _raise)
+
+    target = _circle_target()
+    config = dataclasses.replace(
+        DEFAULT_CONFIG, outer_population=4, total_budget=200, k_max=3, plateau_window_k=2,
+    )
+    bilevel.outer_ga(target, budget=200, seed=3, config=config)
+
+
+def test_cma_rng_positional_seed_is_stable_and_independent_of_call_order():
+    """`cma_rng(main_seed, generation, slot)` даје исти низ у два одвојена конструисања,
+    независно од тога који су други токови конструисани између; различити
+    `(generation, slot)` или различит `main_seed` дају различите низове (PROMPT_RNG Д.4)."""
+    a1 = bilevel.cma_rng(1, 2, 3).standard_normal(5)
+    # конструкција других токова ИЗМЕЂУ два позива за исти (main_seed, g, slot) не сме
+    # да утиче на резултат — токови су независни по конструкцији, не по редоследу.
+    bilevel.cma_rng(1, 5, 0).standard_normal(5)
+    bilevel.cma_rng(1, 2, 0).standard_normal(5)
+    a2 = bilevel.cma_rng(1, 2, 3).standard_normal(5)
+    assert np.array_equal(a1, a2)
+
+    different_slot = bilevel.cma_rng(1, 2, 4).standard_normal(5)
+    different_generation = bilevel.cma_rng(1, 3, 3).standard_normal(5)
+    different_seed = bilevel.cma_rng(2, 2, 3).standard_normal(5)
+    assert not np.array_equal(a1, different_slot)
+    assert not np.array_equal(a1, different_generation)
+    assert not np.array_equal(a1, different_seed)
