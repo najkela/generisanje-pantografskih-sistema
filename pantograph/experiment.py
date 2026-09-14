@@ -69,7 +69,14 @@ def resolution_schedule(
     `plateau_detected`; ниједно стање се не памти између позива (план 31.08., питање 2). То
     је оно што омогућава да и bilevel користи ИСТУ функцију са СВОЈОМ листом историје.
     `generation` је информативан (очекивано `== len(history)`), логика гледа само `history`.
+
+    Режим поређења (§24.2): ако је `config.fixed_n_curve` постављено, распоред се НЕ
+    примењује — враћа се та вредност у свакој генерацији. Функција и прагови остају
+    нетакнути за подразумевани профил.
     """
+    if config.fixed_n_curve is not None:
+        return config.fixed_n_curve
+
     n_values = config.n_schedule
     window = config.plateau_window_grow
     epsilon = config.plateau_eps_grow
@@ -140,6 +147,47 @@ class RunLog:
     # (DECISIONS §24, А1) — bilevel-специфично, baseline га никад не увећава. Ако остаје 0
     # кроз мерење, то потврђује да су границе добро постављене; ако није, види се одмах.
     rho_out_of_bounds: int = 0
+    # --- крива грешка-по-позивима на заједничкој решетки (§24.2, 14.09.) -------------
+    # `error_curve` испод је по ГЕНЕРАЦИЈИ, што није фер јединица између метода: baseline
+    # троши ≈100 позива по генерацији, bilevel ≈2 900, па им криве имају неупоредиву
+    # густину тачака. `calls_curve` је иста крива узоркована на решетки од `grid_step`
+    # ПОЗИВА, једнакој за оба метода, па су директно преклопиве.
+    grid_step: int = 500
+    calls_curve: list[tuple[int, float]] = field(default_factory=list)
+    # Колико позива је уштеђено кешом оцене елите (§17). Под фиксним N кеш се никад не
+    # поништава, па елита не кошта ништа од прве генерације до краја — без овог броја се
+    # не зна колико је ЕФЕКТИВНИХ евалуација заиста било. Bilevel га никад не увећава.
+    cached_calls: int = 0
+    _grid_last_calls: int = 0
+    _grid_last_value: float = float("nan")
+
+    def update_grid(self, calls_spent: int, best_so_far: float) -> None:
+        """Попуни тачке решетке пређене од претходног осматрања (§24.2).
+
+        Вредност у тачки `g` је најбоље што је било познато у ТОМ тренутку, дакле вредност
+        последњег осматрања са `calls_spent <= g` — степенаста функција, без интерполације.
+        Тачке пре првог осматрања добијају прву осмотрену вредност (раније метод није имао
+        ниједну јединку, а обе методе се третирају исто).
+        """
+        step = self.grid_step
+        value = self._grid_last_value
+        if value != value or value == float("inf"):   # NaN/inf → још нема осматрања
+            value = best_so_far
+        for i in range(self._grid_last_calls // step + 1, calls_spent // step + 1):
+            self.calls_curve.append((i * step, value))
+        self._grid_last_calls = calls_spent
+        self._grid_last_value = best_so_far
+
+    def flush_grid(self, total_budget: int) -> None:
+        """Допуни решетку до пуног буџета последњом познатом вредношћу — да криве оба
+        метода имају исту дужину и кад ток стане пре потрошеног буџета."""
+        step = self.grid_step
+        value = self._grid_last_value
+        if value != value:
+            return
+        for i in range(self._grid_last_calls // step + 1, total_budget // step + 1):
+            self.calls_curve.append((i * step, value))
+        self._grid_last_calls = max(self._grid_last_calls, total_budget)
 
     @property
     def error_curve(self) -> list[tuple[int, float]]:
@@ -184,6 +232,9 @@ class RunLog:
             "config": self.config,
             "final_error": self.final_error,
             "rho_out_of_bounds": self.rho_out_of_bounds,
+            "grid_step": self.grid_step,
+            "calls_curve": [[int(c), float(v)] for c, v in self.calls_curve],
+            "cached_calls": self.cached_calls,
             "records": [asdict(r) for r in self.records],
             "best_genome": _genome_to_dict(self.best_genome) if self.best_genome is not None else None,
         }
@@ -218,6 +269,9 @@ class RunLog:
             best_genome=_genome_from_dict(data["best_genome"]) if data.get("best_genome") else None,
             final_error=data.get("final_error", float("nan")),
             rho_out_of_bounds=data.get("rho_out_of_bounds", 0),
+            grid_step=data.get("grid_step", 500),
+            calls_curve=[(int(c), float(v)) for c, v in data.get("calls_curve", [])],
+            cached_calls=data.get("cached_calls", 0),
         )
 
 

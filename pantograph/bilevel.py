@@ -573,6 +573,7 @@ def outer_ga(
         git_commit=git_commit_hash(),
         config=dataclasses.asdict(run_config),
     )
+    log.grid_step = run_config.grid_step
 
     population = _initialize_population(run_config, rng_init)
     history: list[float] = []
@@ -642,16 +643,21 @@ def outer_ga(
         if reporter is not None:
             reporter.update(record_entry, best_genome_overall)
         history.append(best_score)
+        log.update_grid(budget_tracker.spent, best_score_so_far)
 
         if budget_tracker.exhausted:
             break
-        if n_curve == run_config.n_schedule[-1] and plateau_detected(
+        # `early_stop=False` (режим поређења, §24.2) гаси ПОЗИВАОЦА, не сам механизам —
+        # `plateau_detected` остаје нетакнут и даље ради за динамички K и за распоред N.
+        if run_config.early_stop and n_curve == run_config.n_schedule[-1] and plateau_detected(
             history[max_n_start:], run_config.plateau_window_stop, run_config.plateau_eps_stop
         ):
             break
 
         population = _next_generation(population, scores, run_config, rng_select, rng_mut, budget_tracker)
         generation += 1
+
+    log.flush_grid(run_config.total_budget)
 
     if best_genome_overall is not None:
         try:
