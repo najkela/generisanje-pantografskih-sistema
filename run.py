@@ -20,7 +20,7 @@ import numpy as np
 
 from pantograph.baseline import evolve
 from pantograph.bilevel import outer_ga
-from pantograph.config import DEFAULT_CONFIG, QUICK_CONFIG
+from pantograph.config import DEFAULT_CONFIG, POREDJENJE_CONFIG, QUICK_CONFIG
 from pantograph.curve import TargetCurve, apply_similarity_transform, place_on_target
 from pantograph.experiment import (
     RunLog,
@@ -103,7 +103,17 @@ def run_experiment(args: argparse.Namespace) -> None:
     `log.json`, `best_genome.json`, `error_curve.png`, `best_path.png`, `mechanism.png`,
     `snapshots/`, `command.txt`.
     """
-    config = QUICK_CONFIG if args.quick else DEFAULT_CONFIG
+    if args.quick and args.rezim != "podrazumevani":
+        raise SystemExit("--quick и --rezim poredjenje се искључују: quick је демонстрација, "
+                         "режим поређења је мерење.")
+    # Профил покретања. Режим поређења (§24.2) је ДОПУНА подразумеваном, не замена —
+    # подразумевани профил (буџет 50 000, распоред N, плато зауставља) остаје нетакнут.
+    if args.quick:
+        config = QUICK_CONFIG
+    elif args.rezim == "poredjenje":
+        config = POREDJENJE_CONFIG
+    else:
+        config = DEFAULT_CONFIG
     if args.max_link_ratio is not None:
         # Config је frozen — вредност се уводи преко dataclasses.replace (PROMPT_ITERACIJA
         # целина В). Подразумевано (None) значи: узми вредност из профила без измене.
@@ -147,7 +157,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         seed=args.seed,
         n_schedule=config.n_schedule,
         git_commit=git_commit_hash(),
-        profile="quick" if args.quick else "",
+        profile="quick" if args.quick else ("поређење" if args.rezim == "poredjenje" else ""),
     )
 
     if args.method == "baseline":
@@ -215,6 +225,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         f"--seed {args.seed} --budget {budget} --population {population} "
         f"--max-link-ratio {config.max_link_to_radius_ratio}"
         + (" --quick" if args.quick else "")
+        + (f" --rezim {args.rezim}" if args.rezim != "podrazumevani" else "")
         + (f" --log-every {args.log_every}" if args.log_every != 1 else "")
         + (f" --snapshot-every {args.snapshot_every}" if args.snapshot_every else "")
     )
@@ -314,6 +325,12 @@ def parse_args() -> argparse.Namespace:
     run_p.add_argument("--out", default="results", help="директоријум за фолдере покретања")
     run_p.add_argument("--quick", action="store_true",
                         help="демонстрациони профил QUICK_CONFIG — НИЈЕ мерење за H1 (config.py)")
+    run_p.add_argument("--rezim", choices=["podrazumevani", "poredjenje"],
+                        default="podrazumevani",
+                        help="режим покретања: podrazumevani = профил из §18 (буџет 50 000, "
+                             "распоред N 90→720, плато зауставља); poredjenje = режим поређења "
+                             "из DECISIONS §24.2 (фиксно N=720, буџет 100 000, без раног "
+                             "заустављања, крива грешка-по-позивима на заједничкој решетки)")
     run_p.add_argument("--log-every", type=int, default=1,
                         help="испиши сваку K-ту генерацију у конзоли (подразумевано све)")
     run_p.add_argument("--snapshot-every", type=int, default=0,

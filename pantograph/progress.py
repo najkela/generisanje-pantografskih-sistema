@@ -104,15 +104,25 @@ class ProgressReporter:
         self._write(SEPARATOR)
         self._write(f"  ГЕНЕРИСАЊЕ ПАНТОГРАФСКИХ МЕХАНИЗАМА — метод: {method}")
         self._write(SEPARATOR)
-        if profile:
+        if profile == "поређење":
+            self._write("  РЕЖИМ ПОРЕЂЕЊА (DECISIONS §24.2) — мерење за H1; "
+                        "НИЈЕ упоредиво са подразумеваним профилом")
+            self._write(THIN)
+        elif profile:
             self._write(f"  ПРОФИЛ: {profile} — демонстрација, НИЈЕ мерење за поређење метода")
             self._write(THIN)
+        n_row = (
+            f"фиксно {self.config.fixed_n_curve} (без распореда)"
+            if self.config.fixed_n_curve is not None
+            else " → ".join(str(n) for n in n_schedule)
+        )
         rows = [
             ("циљна крива", curve),
             ("seed", str(seed)),
             ("популација", str(self.population_size)),
             ("буџет", f"{_thousands(self.total_budget)} позива симулатора"),
-            ("распоред N", " → ".join(str(n) for n in n_schedule)),
+            ("резолуција N", n_row),
+            ("рано заустављање", "укључено (плато)" if self.config.early_stop else "ИСКЉУЧЕНО"),
             ("гломазност ≤", f"{self.config.max_link_to_radius_ratio:.2f}× (largest_link/path_radius)"),
         ]
         if method == "bilevel":
@@ -132,7 +142,7 @@ class ProgressReporter:
             f"на сваких {self.snapshot_every} генерација" if self.snapshot_every else "искључени",
         ))
         for label, value in rows:
-            self._write(f"  {label:<16}{value}")
+            self._write(f"  {label:<18}{value}")
         self._write(SEPARATOR)
 
     def update(self, record: GenerationRecord, best_genome: Genome | None = None) -> None:
@@ -260,5 +270,5 @@ class ProgressReporter:
         if self.run_dir:
             rows.append(("фолдер", self.run_dir))
         for label, value in rows:
-            self._write(f"  {label:<16}{value}")
+            self._write(f"  {label:<18}{value}")
         self._write(SEPARATOR)
