@@ -1,10 +1,35 @@
-"""Спецификација тополошких оператора: add_node (начин А, Б), delete_node (BASELINE_SPEC §4)."""
+"""Спецификација тополошких оператора: add_node (начин А, Б), delete_node (BASELINE_SPEC §4),
+reconnect_node (режим фиксног n, DECISIONS §26.3)."""
 
 import numpy as np
+import pytest
 
-from pantograph.genome import Topology, role
-from pantograph.operators import add_node, delete_node, prune_dead_nodes, random_initial_genome
-from pantograph.validation import degrees_of_freedom, validate
+from pantograph import operators
+from pantograph.genome import Topology, role, to_sequence
+from pantograph.operators import (
+    _reconnect_change_anchor,
+    _reconnect_flip_sign,
+    add_node,
+    delete_node,
+    prune_dead_nodes,
+    random_initial_genome,
+    reconnect_node,
+)
+from pantograph.validation import InvalidTopology, degrees_of_freedom, solving_order, validate
+
+
+@pytest.fixture
+def sixbar() -> tuple[Topology, np.ndarray]:
+    """Механизам са шест чворова (два „унутрашња" чвора пре trace-a, k=3 и k=4) — треба нам
+    бар два тополошка гена да оператор преповезивања има шта да бира (DECISIONS §26.3)."""
+    topology = Topology(
+        n_nodes=6,
+        edges=[(0, 2), (1, 3), (2, 3), (2, 4), (3, 4), (3, 5), (4, 5)],
+    )
+    coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, 2.0], [1.5, 1.5]]
+    )
+    return topology, coords
 
 
 def test_add_node_mode_a_new_node_becomes_tracer(fourbar):
@@ -145,3 +170,171 @@ def test_prune_dead_nodes_is_idempotent(fourbar):
     assert pruned_topology.edges == fourbar.edges
     assert pruned_topology.n_nodes == fourbar.n_nodes
     assert np.allclose(pruned_coords, coords)
+
+
+# --- reconnect_node: подпотез „промена ослонца" (DECISIONS §26.3) ----------------
+
+
+def test_reconnect_change_anchor_touches_exactly_one_edge_coords_untouched(sixbar):
+    """Мења тачно једну ивицу инцидентну чвору k; координате бит-идентичне пре/после; n
+    непромењено (DECISIONS §26.3) — за разлику од „обртања знака"."""
+    topology, coords = sixbar
+    for trial in range(200):
+        rng = np.random.default_rng(trial)
+        k = int(rng.integers(3, topology.n_nodes))
+        result = _reconnect_change_anchor(topology, coords, rng, k)
+        assert result is not None  # структурно недостижно за k≥3 на овом фикстуру
+        new_topology, new_coords = result
+
+        assert new_topology.n_nodes == topology.n_nodes
+        assert np.array_equal(new_coords, coords)  # координате СЕ НЕ дирају
+
+        old_edges = {frozenset(e) for e in topology.edges}
+        new_edges = {frozenset(e) for e in new_topology.edges}
+        removed = old_edges - new_edges
+        added = new_edges - old_edges
+        assert len(removed) == 1 and len(added) == 1
+        (removed_edge,) = removed
+        (added_edge,) = added
+        assert k in removed_edge
+        assert k in added_edge
+
+
+def test_reconnect_change_anchor_new_anchor_below_k_and_distinct(sixbar):
+    """Нови ослонац је увек `< k` (инваријанта редоследа §16) и никад не поклапа преостали
+    ослонац — обоје по конструкцији, не по накнадној провери (DECISIONS §26.3)."""
+    topology, coords = sixbar
+    for trial in range(200):
+        rng = np.random.default_rng(1000 + trial)
+        k = int(rng.integers(3, topology.n_nodes))
+        new_topology, _ = _reconnect_change_anchor(topology, coords, rng, k)
+
+        order = solving_order(new_topology)  # мора проћи — инваријанта одржана по конструкцији
+        new_a, new_b = {step.target: step.parents for step in order}[k]
+        assert new_a < k
+        assert new_b < k
+        assert new_a != new_b
+
+
+def test_reconnect_change_anchor_preserves_edge_count(sixbar):
+    """DOF инваријанта: тачно једна ивица мање, тачно једна више — укупан број непромењен."""
+    topology, coords = sixbar
+    rng = np.random.default_rng(0)
+    k = int(rng.integers(3, topology.n_nodes))
+    new_topology, _ = _reconnect_change_anchor(topology, coords, rng, k)
+    assert len(new_topology.edges) == len(topology.edges)
+
+
+# --- reconnect_node: подпотез „обртање знака" (DECISIONS §26.3) ------------------
+
+
+def test_reconnect_flip_sign_touches_only_target_gene_sign(sixbar):
+    """Мења искључиво `s` циљаног гена — ослонци и `ρ` СВИХ гена (укључујући циљани) остају
+    нетакнути, за разлику од подпотеза „промена ослонца" (DECISIONS §26.3). Координате низводно
+    од `k` МОГУ се променити (физичко огледање), гени ипак остају исти скуп вредности."""
+    topology, coords = sixbar
+    parent_seq = to_sequence(topology, coords)
+    seen_success = False
+    for trial in range(200):
+        rng = np.random.default_rng(2000 + trial)
+        k = int(rng.integers(3, topology.n_nodes))
+        result = _reconnect_flip_sign(topology, coords, rng, k)
+        if result is None:
+            continue  # геометријски пад дозвољен (circuit defect при round-trip-у)
+        seen_success = True
+        new_topology, new_coords = result
+        assert new_topology.n_nodes == topology.n_nodes
+        child_seq = to_sequence(new_topology, new_coords)
+        idx = k - 3
+        for i, (pg, cg) in enumerate(zip(parent_seq.genes, child_seq.genes)):
+            assert cg.a == pg.a
+            assert cg.b == pg.b
+            assert cg.rho_a == pytest.approx(pg.rho_a)
+            assert cg.rho_b == pytest.approx(pg.rho_b)
+            if i == idx:
+                assert cg.s == -pg.s
+            else:
+                assert cg.s == pg.s
+    assert seen_success  # бар један покушај мора успети на овом фикстуру
+
+
+# --- reconnect_node: оба подпотеза — валидност резултата -------------------------
+
+
+def test_reconnect_result_validates_or_fails_cleanly(sixbar):
+    """Резултат који прође реконструкцију пролази `validate()` или пада искључиво на
+    `InvalidTopology` (нпр. чвор 1 престане да буде предак трагача) — никад друга врста
+    изузетка (DECISIONS §26.3)."""
+    topology, coords = sixbar
+    for trial in range(200):
+        rng = np.random.default_rng(3000 + trial)
+        result = reconnect_node(topology, coords, rng, p_change_anchor=0.70)
+        if result is None:
+            continue
+        new_topology, _ = result
+        try:
+            validate(new_topology)
+        except InvalidTopology:
+            pass  # прихватљив исход — circuit-defect типа провере, не пад програма
+
+
+# --- reconnect_node: дистрибуција подпотеза (детерминистички, БЕЗ статистике) ----
+
+
+class _FixedUniformRNG:
+    """Минималан РНГ „патрљак" за детерминистичко тестирање гранања унутар `reconnect_node`
+    (DECISIONS §26.3) — `uniform()` увек враћа задату вредност, `integers()`/`choice()`
+    делегирају правом генератору. Statистички тест са толеранцијом би био повремено-црвен;
+    ово уместо тога тврди тачну грану."""
+
+    def __init__(self, real_rng: np.random.Generator, uniform_value: float) -> None:
+        self._real = real_rng
+        self._uniform_value = uniform_value
+
+    def integers(self, *args, **kwargs):
+        return self._real.integers(*args, **kwargs)
+
+    def uniform(self, *args, **kwargs):
+        return self._uniform_value
+
+    def choice(self, *args, **kwargs):
+        return self._real.choice(*args, **kwargs)
+
+
+def test_reconnect_node_dispatches_change_anchor_below_threshold(monkeypatch, sixbar):
+    """`rng.uniform() < p_change_anchor` → подпотез „промена ослонца" (DECISIONS §26.3).
+    Монкипатч на саме подпотезе, не статистика — детерминистичка тврдња гране."""
+    topology, coords = sixbar
+    calls: list[str] = []
+    monkeypatch.setattr(
+        operators, "_reconnect_change_anchor",
+        lambda t, c, r, k: calls.append("anchor") or (t, c),
+    )
+    monkeypatch.setattr(
+        operators, "_reconnect_flip_sign",
+        lambda t, c, r, k: calls.append("sign") or (t, c),
+    )
+    rng = _FixedUniformRNG(np.random.default_rng(0), uniform_value=0.0)
+
+    reconnect_node(topology, coords, rng, p_change_anchor=0.70)
+
+    assert calls == ["anchor"]
+
+
+def test_reconnect_node_dispatches_flip_sign_above_threshold(monkeypatch, sixbar):
+    """`rng.uniform() >= p_change_anchor` → подпотез „обртање знака" (DECISIONS §26.3)."""
+    topology, coords = sixbar
+    calls: list[str] = []
+    monkeypatch.setattr(
+        operators, "_reconnect_change_anchor",
+        lambda t, c, r, k: calls.append("anchor") or (t, c),
+    )
+    monkeypatch.setattr(
+        operators, "_reconnect_flip_sign",
+        lambda t, c, r, k: calls.append("sign") or (t, c),
+    )
+    rng = _FixedUniformRNG(np.random.default_rng(0), uniform_value=0.99)
+
+    reconnect_node(topology, coords, rng, p_change_anchor=0.70)
+
+    assert calls == ["sign"]

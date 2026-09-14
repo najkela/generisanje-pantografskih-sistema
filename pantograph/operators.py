@@ -4,13 +4,32 @@
 последња позиција) — мутација их никад не додељује директно (README 1.3, измењено 30.08.).
 Невалидна мутација остаје у популацији са казном — мутација се не понавља до валидне.
 
-Оператора има само два, оба над чворовима (`add_node`, `delete_node`); ивичних оператора
-нема — ивице настају и нестају искључиво заједно са чвором (BASELINE_SPEC §4).
+При променљивом `n` оператора има само два, оба над чворовима (`add_node`, `delete_node`);
+ивичних оператора нема — ивице настају и нестају искључиво заједно са чвором (BASELINE_SPEC
+§4). У режиму фиксног `n` (DECISIONS §26.3) `add_node`/`delete_node` постају недостижни и
+једини тополошки потез је `reconnect_node` — он мења ивице (пар ослонаца или знак гране)
+без промене броја чворова.
+
+Уз то, „ивичних оператора нема" из претходног пасуса важи само за промену БРОЈА чворова —
+`reconnect_node` јесте ивични оператор, само не мења `n`.
 """
+
+import dataclasses
 
 import numpy as np
 
-from .genome import CRANK, FIXED_A, FIXED_B, Genome, Topology, link_lengths, tracer
+from .genome import (
+    CRANK,
+    FIXED_A,
+    FIXED_B,
+    Genome,
+    Sequence,
+    Topology,
+    from_sequence,
+    link_lengths,
+    to_sequence,
+    tracer,
+)
 from .simulator import circle_intersect_pair
 from .validation import InvalidTopology, solving_order, validate
 
@@ -243,6 +262,111 @@ def delete_node(
     """
     new_topology, new_coords, _u = delete_node_with_target(topology, coords, rng)
     return new_topology, new_coords
+
+
+# --- оператор преповезивања (режим фиксног n, DECISIONS §26.3) -------------------
+
+
+def _reconnect_change_anchor(
+    topology: Topology, coords: np.ndarray, rng: np.random.Generator, k: int
+) -> tuple[Topology, np.ndarray] | None:
+    """Подпотез „промена ослонца" (DECISIONS §26.3) — директно над ивицама, координате се
+    НЕ дирају. Намерно НЕ иде преко `Sequence`/`from_sequence` са задржаним `ρ`: `ρ_a`,
+    `ρ_b` су односи према размаку ослонаца `D_k` у θ=0, а нов пар ослонаца значи нов `D_k`.
+    Задржан `ρ` би за нови размак бацио чвор `k` на друго место и повукао низводне
+    зависнике — то није ситан потез (преседан: `delete_node_with_target` ради исто, никад
+    не дира `ρ`, само преспаја ивице). `ρ` и знак `s` се сами пресрачунавају при следећој
+    канонизацији (`genome.to_sequence`) — овде их нема у чему ни да се пишу.
+
+    Ослонци чвора `k` (његова два суседа мањег индекса, инваријанта §16) читају се преко
+    `solving_order`, исти образац као `delete_node_with_target`. Нови ослонац је равномерно
+    из `{0,...,k-1} \\ {a,b}` — увек `< k` конструкцијом (инваријанта редоследа одржана),
+    увек различит од преосталог ослонца (`a_k ≠ b_k` одржано).
+
+    За `k = 3` избор није насумичан него принудан: `range(3) \\ {a,b}` има тачно један
+    елемент. Ако су ослонци чвора 3 баш `{0,1}` (оба фиксна), потез га форсирано пребацује
+    на пар који укључује crank (2) — исти ризик „оба ослонца фиксна" постоји већ данас преко
+    `add_node` начина Б; овде постаје системски јер је при фиксном `n` ово једини тополошки
+    потез (в. `docs/IZVESTAJ_FIKSNO_N.md`, мерено по `k`).
+
+    Враћа `None` само у случају празног скупа кандидата — структурно недостижно за `k≥3`
+    (`range(k)` за `k≥3` има бар 3 елемента, минус 2 заузета остаје бар 1), задржано као
+    изричита одбрана која пада гласно, не тихо. Никад не пада на circuit defect у тренутку
+    потеза (нема `from_sequence` реконструкције) — резултат ипак може касније бити невалидан
+    (нпр. чвор 1 престане да буде предак трагача, или се не може канонизовати при следећем
+    `to_sequence` позиву), исти третман као и код `delete_node` (README 2.3).
+    """
+    try:
+        order = solving_order(topology)
+    except InvalidTopology:
+        return None
+    parents_of = {step.target: step.parents for step in order}
+    a, b = parents_of[k]
+
+    change_a = bool(rng.integers(0, 2))
+    old_anchor = a if change_a else b
+
+    candidates = [c for c in range(k) if c not in (a, b)]
+    if not candidates:
+        return None
+
+    new_anchor = int(rng.choice(candidates))
+    new_edges = [(x, y) for x, y in topology.edges if {x, y} != {old_anchor, k}]
+    new_edges.append((new_anchor, k))
+    new_topology = Topology(n_nodes=topology.n_nodes, edges=new_edges)
+    return new_topology, coords.copy()
+
+
+def _reconnect_flip_sign(
+    topology: Topology, coords: np.ndarray, rng: np.random.Generator, k: int
+) -> tuple[Topology, np.ndarray] | None:
+    """Подпотез „обртање знака" (DECISIONS §26.3) — преко секвенце склапања, намерно
+    другачије имплементиран од „промена ослонца". Знак `s` није самостално представљен у
+    `Topology`/`coords` — изводи се из геометрије тек при канонизацији (`to_sequence`), па је
+    round-trip преко `Sequence` једини начин да се овај подпотез уопште изрази. За разлику
+    од „промена ослонца", овај потез физички помера чвор `k` (огледа га преко праве `a→b`)
+    и реконструише све његове зависнике од те тачке надаље — зато МОЖЕ пасти на circuit
+    defect (`from_sequence` врати `None`), што „промена ослонца" не може у тренутку потеза.
+
+    Ослонци (a, b) и `ρ_a`, `ρ_b` остају нетакнути — мења се само `s_k → -s_k`.
+    """
+    try:
+        seq = to_sequence(topology, coords)
+    except InvalidTopology:
+        return None
+    idx = k - 3
+    new_genes = list(seq.genes)
+    new_genes[idx] = dataclasses.replace(new_genes[idx], s=-new_genes[idx].s)
+    new_seq = Sequence(core=seq.core.copy(), genes=new_genes)
+    return from_sequence(new_seq)
+
+
+def reconnect_node(
+    topology: Topology,
+    coords: np.ndarray,
+    rng: np.random.Generator,
+    p_change_anchor: float,
+) -> tuple[Topology, np.ndarray] | None:
+    """Оператор преповезивања — једини тополошки потез у режиму фиксног `n` (DECISIONS
+    §26.3, README 2.3 допуна). Бира један чвор `k ∈ {3,...,n-1}` равномерно (заједничко за
+    оба подпотеза), па подпотез „промена ослонца" (вероватноћа `p_change_anchor`,
+    подразумевано `Config.p_reconnect_anchor = 0.70`) или „обртање знака" (комплемент).
+    `n` се никад не мења; улоге (fixed 0,1, crank 2, tracer n-1) остају какве јесу.
+
+    Подела вероватноће прати величину категоричког простора кроз који потез креће: за
+    чвор `k` постоји `C(k,2)` избора пара ослонаца наспрам свега 2 избора знака (в.
+    `Config.p_reconnect_anchor` за пун коментар) — не „крупноћу" потеза, обртање знака је
+    геометријски крупнији потез (физички помера чвор и низводни ланац), промена ослонца
+    ситнији (чува облик у θ=0 непромењен осим за сам чвор `k`).
+
+    Враћа `None` само кад сам подпотез пријави дегенерисан/недостижан случај — третира се
+    као свака друга невалидна мутација (README 2.3, „Остало"): без понављања.
+    """
+    n = topology.n_nodes
+    k = int(rng.integers(3, n))
+    if rng.uniform() < p_change_anchor:
+        return _reconnect_change_anchor(topology, coords, rng, k)
+    return _reconnect_flip_sign(topology, coords, rng, k)
 
 
 # --- координатни оператор (baseline; одлука од 09.08.) ---------------------------
