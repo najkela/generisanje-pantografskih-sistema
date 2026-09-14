@@ -32,7 +32,13 @@ from .experiment import (
 from .fitness import PENALTY
 from .genome import Genome, Sequence, TopologySkeleton, from_sequence, link_lengths, to_sequence
 from .geometry_vector import active_positions, evaluate_vector, skeleton_of, to_sequence_from_x, to_x
-from .operators import add_node, delete_node_with_target, prune_dead_nodes, random_initial_genome
+from .operators import (
+    add_node,
+    delete_node_with_target,
+    prune_dead_nodes,
+    random_initial_genome,
+    reconnect_node,
+)
 from .simulator import path_health, simulate_with_transmission_angle
 from .validation import InvalidTopology, validate
 
@@ -335,6 +341,24 @@ def _abs_map_delete_node(n_parent: int, deleted_position: int) -> dict[int, int]
     return mapping
 
 
+def _abs_map_reconnect(n_parent: int) -> dict[int, int | None]:
+    """За `reconnect_node` (DECISIONS §26.3, режим фиксног `n`): `n` се не мења, ниједан
+    ген не мења позицију — идентитет за све позиције.
+
+    Образложење (директно из механике оператора, не само по аналогији са
+    `_abs_map_delete_node`): за подпотез „промена ослонца" чвор `k` дословно задржава
+    координату (координате се уопште не дирају) — његов слот у ЦМА-ЕС вектору описује исту
+    тачку у простору пре и после потеза. За подпотез „обртање знака" `k` мења позицију
+    (пресликава се преко праве `a→b`), али и даље остаје исти слот у вектору (иста позиција
+    `k` у секвенци) — наслеђивање родитељеве тренутне ЦМА-ЕС ширине на том слоту остаје
+    разумна почетна претпоставка, исти принцип који `_abs_map_delete_node` већ користи за
+    преспојене зависнике. Мерено (не само претпостављено): однос `ρ_ново/ρ_старо` за
+    преповезани ген подпотеза „промена ослонца" — в. `tools/meri_stopu_nevalidnih.py` и
+    `docs/IZVESTAJ_FIKSNO_N.md`.
+    """
+    return {k: k for k in range(3, n_parent)}
+
+
 def _choose_topology_operator(n_nodes: int, config: Config, rng: np.random.Generator) -> str:
     """Иста расподела и форсирања на границама као у baseline-у (BASELINE_SPEC §7) —
     сопствена копија (не увоз приватне функције из `baseline.py`) да bilevel не зависи
@@ -352,12 +376,27 @@ def _choose_topology_operator(n_nodes: int, config: Config, rng: np.random.Gener
 
 
 def _mutate_topology(genome: Genome, config: Config, rng: np.random.Generator):
-    """Тополошка само-мутација (add_node А/Б или delete_node) + `index_map` за
-    `warm_start` (DECISIONS §22 А7, В3). Враћа `(topology, coords, index_map,
-    operator_name)` или `None` ако сам оператор пријави дегенерисан случај (нпр. add_node
-    Б са поклопљеним ослонцима) — исти третман као `baseline.mutate` (README 2.3, „Остало")."""
+    """Тополошка само-мутација (add_node А/Б, delete_node, или — у режиму фиксног `n`,
+    DECISIONS §26.3 — reconnect_node) + `index_map` за `warm_start` (DECISIONS §22 А7, В3).
+    Враћа `(topology, coords, index_map, operator_name)` или `None` ако сам оператор
+    пријави дегенерисан случај (нпр. add_node Б са поклопљеним ослонцима) — исти третман
+    као `baseline.mutate` (README 2.3, „Остало").
+
+    У режиму фиксног `n` (`config.fixed_n_nodes is not None`) `_choose_topology_operator`
+    (одатле и `add_node`/`delete_node`) је структурно недостижан — грана се уопште не
+    позива. Ова грана је бит-идентична претходном коду, `fixed_n_nodes is None` (default)
+    путања потпуно нетакнута.
+    """
     topology, coords = genome.topology, genome.coords
     n_parent = topology.n_nodes
+
+    if config.fixed_n_nodes is not None:
+        result = reconnect_node(topology, coords, rng, config.p_reconnect_anchor)
+        if result is None:
+            return None
+        new_topology, new_coords = result
+        return new_topology, new_coords, _abs_map_reconnect(n_parent), "reconnect"
+
     operator = _choose_topology_operator(n_parent, config, rng)
 
     if operator == "add_A":
@@ -404,11 +443,18 @@ def cma_rng(main_seed: int, generation: int, slot: int) -> np.random.Generator:
 def _initialize_population(config: Config, rng_init: np.random.Generator) -> list[TopologyRecord]:
     """Почетна популација топологија (README 4.1) — исти извор као baseline
     (`operators.random_initial_genome`), понавља до валидне И до реконструктибилне
-    секвенце (`to_sequence` може пасти на нумерички дегенерисан случај и поред `validate`)."""
+    секвенце (`to_sequence` може пасти на нумерички дегенерисан случај и поред `validate`).
+
+    У режиму фиксног `n` (`config.fixed_n_nodes is not None`, DECISIONS §26.3) свака
+    топологија добија тачно ту вредност `n` уместо равномерног избора из `n_init_choices`.
+    """
     population: list[TopologyRecord] = []
     for _ in range(config.outer_population):
         while True:
-            n_nodes = int(rng_init.choice(config.n_init_choices))
+            n_nodes = (
+                config.fixed_n_nodes if config.fixed_n_nodes is not None
+                else int(rng_init.choice(config.n_init_choices))
+            )
             result = random_initial_genome(n_nodes, rng_init)
             if result is None:
                 continue

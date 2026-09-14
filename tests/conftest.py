@@ -35,6 +35,22 @@ def ellipse() -> np.ndarray:
 
 
 @pytest.fixture
+def sixbar() -> tuple[Topology, np.ndarray]:
+    """Механизам са шест чворова, БЕЗ мртвог терета — свака ивица је на предачком стаблу
+    trace-a (3→4→5, редом), два „унутрашња" гена (k=3, k=4), да оператор преповезивања
+    (DECISIONS §26.3) има шта да бира. Координате намерно нису колинеарне ни по једном
+    трojцу (родитељ, родитељ, дете) — `to_sequence` мора успети на овом фикстуру."""
+    topology = Topology(
+        n_nodes=6,
+        edges=[(0, 2), (1, 3), (2, 3), (2, 4), (3, 4), (3, 5), (4, 5)],
+    )
+    coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, 2.0], [1.5, 1.5]]
+    )
+    return topology, coords
+
+
+@pytest.fixture
 def ellipse_curve_file() -> TargetCurve:
     """`TargetCurve` из `data/curves/ellipse.txt` (720 тачака из фајла, не аналитичка).
 

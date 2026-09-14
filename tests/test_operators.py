@@ -17,19 +17,8 @@ from pantograph.operators import (
 )
 from pantograph.validation import InvalidTopology, degrees_of_freedom, solving_order, validate
 
-
-@pytest.fixture
-def sixbar() -> tuple[Topology, np.ndarray]:
-    """Механизам са шест чворова (два „унутрашња" чвора пре trace-a, k=3 и k=4) — треба нам
-    бар два тополошка гена да оператор преповезивања има шта да бира (DECISIONS §26.3)."""
-    topology = Topology(
-        n_nodes=6,
-        edges=[(0, 2), (1, 3), (2, 3), (2, 4), (3, 4), (3, 5), (4, 5)],
-    )
-    coords = np.array(
-        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0], [0.5, 2.0], [1.5, 1.5]]
-    )
-    return topology, coords
+# `sixbar` fixture (шест чворова, без мртвог терета) живи у tests/conftest.py — дели га и
+# tests/test_fiksno_n.py (DECISIONS §26.3).
 
 
 def test_add_node_mode_a_new_node_becomes_tracer(fourbar):

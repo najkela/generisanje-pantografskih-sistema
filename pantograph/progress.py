@@ -125,6 +125,10 @@ class ProgressReporter:
             ("рано заустављање", "укључено (плато)" if self.config.early_stop else "ИСКЉУЧЕНО"),
             ("гломазност ≤", f"{self.config.max_link_to_radius_ratio:.2f}× (largest_link/path_radius)"),
         ]
+        if self.config.fixed_n_nodes is not None:
+            # Намерно другачија ознака од „резолуција N" изнад (та је о N тачака криве,
+            # ово је о броју чворова механизма) — режим фиксног n, DECISIONS §26.3.
+            rows.append(("број чворова", f"фиксно {self.config.fixed_n_nodes} (add/delete искључени)"))
         if method == "bilevel":
             # K режим унутрашњег ЦМА-ЕС-а (PROMPT_BILEVEL целина Г) — динамички (плато) или
             # фиксан (H3, референтне 5/15/40); величина спољашње популације је већ горе,

@@ -70,12 +70,21 @@ def run_demo(args: argparse.Namespace) -> None:
     plot_comparison(path, target, title="Демо: путања трагача наспрам циљне криве")
 
 
-def _run_directory(out: str, method: str, curve: str, seed: int) -> str:
+def _run_directory(
+    out: str, method: str, curve: str, seed: int, fixed_n_nodes: int | None = None
+) -> str:
     """Фолдер по покретању: `results/<временска ознака>_<метод>_<крива>_seed<seed>`
-    (козметика 31.08.) — уместо старе равне путање `results/{method}_seed{seed}.json`."""
+    (козметика 31.08.) — уместо старе равне путање `results/{method}_seed{seed}.json`.
+
+    У режиму фиксног `n` (DECISIONS §26.3) име добија и `_n{N}` сегмент, непосредно пре
+    `_seed{seed}` — да `tools/matrica_poredjenja.sh` разликује покретања за различито `n`
+    (иначе логика прескакања завршених прогона пуца). Подразумевано (`None`) име остаје
+    бит-идентично претходном облику — регресија важи.
+    """
     timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     curve_stem = os.path.splitext(os.path.basename(curve))[0]
-    return os.path.join(out, f"{timestamp}_{method}_{curve_stem}_seed{seed}")
+    suffix = f"_n{fixed_n_nodes}" if fixed_n_nodes is not None else ""
+    return os.path.join(out, f"{timestamp}_{method}_{curve_stem}{suffix}_seed{seed}")
 
 
 def _update_latest_link(out: str, run_dir: str) -> None:
@@ -118,6 +127,13 @@ def run_experiment(args: argparse.Namespace) -> None:
         # Config је frozen — вредност се уводи преко dataclasses.replace (PROMPT_ITERACIJA
         # целина В). Подразумевано (None) значи: узми вредност из профила без измене.
         config = dataclasses.replace(config, max_link_to_radius_ratio=args.max_link_ratio)
+    if args.fiksno_n is not None:
+        # Режим фиксног n (DECISIONS §26.3) — доња граница из README 1.4 (минималан
+        # механизам има 4 чвора); горња граница (n_max) се НАМЕРНО не проверава — нема
+        # дејства у овом режиму (`_choose_topology_operator` се не позива).
+        if args.fiksno_n < 4:
+            raise SystemExit("--fiksno-n мора бити ≥ 4 (README 1.4, минималан механизам).")
+        config = dataclasses.replace(config, fixed_n_nodes=args.fiksno_n)
     budget = args.budget if args.budget is not None else config.total_budget
 
     if args.method == "bilevel":
@@ -138,7 +154,9 @@ def run_experiment(args: argparse.Namespace) -> None:
 
     target = TargetCurve.from_file(args.curve)
 
-    run_dir = _run_directory(args.out, args.method, args.curve, args.seed)
+    run_dir = _run_directory(
+        args.out, args.method, args.curve, args.seed, fixed_n_nodes=config.fixed_n_nodes
+    )
     os.makedirs(run_dir, exist_ok=True)
 
     reporter = ProgressReporter(
@@ -226,6 +244,7 @@ def run_experiment(args: argparse.Namespace) -> None:
         f"--max-link-ratio {config.max_link_to_radius_ratio}"
         + (" --quick" if args.quick else "")
         + (f" --rezim {args.rezim}" if args.rezim != "podrazumevani" else "")
+        + (f" --fiksno-n {config.fixed_n_nodes}" if config.fixed_n_nodes is not None else "")
         + (f" --log-every {args.log_every}" if args.log_every != 1 else "")
         + (f" --snapshot-every {args.snapshot_every}" if args.snapshot_every else "")
     )
@@ -348,6 +367,12 @@ def parse_args() -> argparse.Namespace:
                         help="фиксан број итерација унутрашњег ЦМА-ЕС-а, игнорише плато "
                              "(само bilevel, H3 — референтне вредности 5/15/40); "
                              "подразумевано None = динамички K")
+    run_p.add_argument("--fiksno-n", type=int, default=None,
+                        help="фиксан број чворова n за цео ток — иницијализација и мутација "
+                             "(режим Е1, DECISIONS §26.3); једини тополошки оператор постаје "
+                             "преповезивање, add_node/delete_node недостижни; подразумевано "
+                             "None = променљиво n (затечено понашање); ради заједно са "
+                             "--rezim poredjenje (две независне заставице)")
 
     show_p = sub.add_parser("show", help="прикажи сачувано покретање без поновног тренирања")
     show_p.add_argument("run_dir", help="фолдер покретања (нпр. results/latest)")

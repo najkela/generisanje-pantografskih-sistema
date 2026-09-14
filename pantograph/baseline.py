@@ -27,7 +27,14 @@ from .experiment import (
 )
 from .fitness import PENALTY, evaluate
 from .genome import Genome, Sequence, from_sequence, link_lengths, to_sequence
-from .operators import add_node, delete_node, mutate_coords, prune_dead_nodes, random_initial_genome
+from .operators import (
+    add_node,
+    delete_node,
+    mutate_coords,
+    prune_dead_nodes,
+    random_initial_genome,
+    reconnect_node,
+)
 from .simulator import path_health, simulate_with_transmission_angle
 from .validation import InvalidTopology, validate
 
@@ -115,17 +122,26 @@ def mutate(
     понављања (README 2.3, „Остало"); резултујућа топологија иначе може бити структурно
     неважећа (нпр. изолован чвор 1 после `delete_node`) и то се хвата тек при евалуацији
     фитнеса, не овде.
+
+    У режиму фиксног `n` (`config.fixed_n_nodes is not None`, DECISIONS §26.3) једини
+    тополошки потез је `reconnect_node` — `_choose_topology_operator`
+    (`add_node`/`delete_node`) је структурно недостижан, грана се уопште не позива.
+    Ова грана је бит-идентична претходном коду, па је `fixed_n_nodes is None` (default)
+    путања потпуно нетакнута — исти `rng` позиви истим редом.
     """
     topology, coords = genome.topology, genome.coords
 
     if rng.uniform() < p_topo:
-        operator = _choose_topology_operator(topology.n_nodes, config, rng)
-        if operator == "add_A":
-            result = add_node(topology, coords, rng, mode="A")
-        elif operator == "add_B":
-            result = add_node(topology, coords, rng, mode="B")
+        if config.fixed_n_nodes is not None:
+            result = reconnect_node(topology, coords, rng, config.p_reconnect_anchor)
         else:
-            result = delete_node(topology, coords, rng)
+            operator = _choose_topology_operator(topology.n_nodes, config, rng)
+            if operator == "add_A":
+                result = add_node(topology, coords, rng, mode="A")
+            elif operator == "add_B":
+                result = add_node(topology, coords, rng, mode="B")
+            else:
+                result = delete_node(topology, coords, rng)
         if result is None:
             return None
         topology, coords = result
@@ -217,12 +233,19 @@ def initialize_population(config: Config, rng_init: np.random.Generator) -> list
     `config.n_init_choices`, понавља `random_initial_genome` до валидне (§8: чвор 1 се
     бира случајно као ослонац па повремено остане изолован — то се третира као невалидна
     иницијализација, исто као невалидна мутација, БЕЗ посебне логике овде).
+
+    У режиму фиксног `n` (`config.fixed_n_nodes is not None`, DECISIONS §26.3) свака
+    јединка добија тачно ту вредност `n` уместо равномерног избора из `n_init_choices` —
+    цела популација остаје исте величине кроз цео ток.
     """
     population = []
     for _ in range(config.population_size):
         result = None
         while result is None:
-            n_nodes = int(rng_init.choice(config.n_init_choices))
+            n_nodes = (
+                config.fixed_n_nodes if config.fixed_n_nodes is not None
+                else int(rng_init.choice(config.n_init_choices))
+            )
             result = random_initial_genome(n_nodes, rng_init)
         topology, coords = result
         population.append(Genome(topology=topology, coords=coords))
