@@ -9,7 +9,7 @@ from pantograph.config import DEFAULT_CONFIG
 from pantograph.fitness import chamfer
 from pantograph.genome import Topology, link_lengths, to_sequence
 from pantograph.operators import random_initial_genome
-from pantograph.simulator import branch_signs, simulate
+from pantograph.simulator import branch_signs, circle_intersect, simulate, simulate_with_transmission_angle
 from pantograph.validation import solving_order
 
 
@@ -130,3 +130,36 @@ def test_unsolvable_geometry_returns_none(fourbar):
     """
     coords = np.array([[0.0, 0.0], [4.0, 0.0], [1.0, 0.0], [2.5, 0.0]])
     assert simulate(fourbar, coords, solving_order(fourbar), n=90) is None
+
+
+def test_circle_intersect_zero_length_r1_returns_none():
+    """Нулта полуга `r1` не сме пасти на дељење нулом (docs/NALAZ_15_09_nulta_poluga.md).
+
+    Круг полупречника `r1=0` је сама тачка `p1`; `d == r2` тачно (2.0 == 2.0) чини да
+    `circle_intersect_pair` ипак врати ВАЖЕЋИ пар (`h=0`) — управо тај гранични случај
+    је узроковао `ZeroDivisionError` на `sin_angle = (d*h)/(r1*r2)` у стварном ноћном
+    покретању (`baseline egg seed2`, 15.09., пад на ~5.7% буџета).
+    """
+    p1 = np.array([0.0, 0.0])
+    p2 = np.array([2.0, 0.0])
+    assert circle_intersect(p1, p2, r1=0.0, r2=2.0, sign=1, min_sin_angle=0.0) is None
+
+
+def test_circle_intersect_zero_length_r2_returns_none():
+    """Огледало претходног теста — нулта полуга `r2` (`d == r1` тачно), покрива и другу
+    грану `sign` (docs/NALAZ_15_09_nulta_poluga.md)."""
+    p1 = np.array([0.0, 0.0])
+    p2 = np.array([2.0, 0.0])
+    assert circle_intersect(p1, p2, r1=2.0, r2=0.0, sign=-1, min_sin_angle=0.0) is None
+
+
+def test_simulate_with_transmission_angle_zero_length_link_returns_none(fourbar):
+    """Друго, независно место истог бага (docs/NALAZ_15_09_nulta_poluga.md) —
+    `positions_and_angle_at` рачуна `sin_angle = (d*h)/(ra*rb)` истом формулом, засебно
+    од `circle_intersect`. Чвор 3 постављен тачно на координате чвора 1 (`ra=0` у θ=0);
+    растојање ослонаца `d(1,2)=3.0 == rb=3.0` тачно — исти гранични случај, важећи пар
+    уз `h=0`.
+    """
+    coords = np.array([[0.0, 0.0], [4.0, 0.0], [1.0, 0.0], [4.0, 0.0]])
+    order = solving_order(fourbar)
+    assert simulate_with_transmission_angle(fourbar, coords, order, n=90) is None
