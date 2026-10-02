@@ -1,0 +1,10 @@
+documentclass: IEEEtran
+classoption:
+  - conference
+  - a4paper
+  - 10pt
+mainfont: FreeSerif
+sansfont: FreeSans
+monofont: FreeMono
+mathfont: Latin Modern Math
+link-citations: true
