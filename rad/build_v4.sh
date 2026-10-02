@@ -6,7 +6,7 @@ s=open("RAD_v4.tex").read()
 s=s.replace("\\setcounter{secnumdepth}{-\\maxdimen} % remove section numbering","\\setcounter{secnumdepth}{3}")
 s=s.replace("\\author{Никола Најић \\and Ментор: Бранислав Милојковић}",
   "\\author{\\IEEEauthorblockN{Никола Најић}\\IEEEauthorblockA{Истраживачка станица Петница\\\\ Ваљево, Србија\\\\ nnajic1@gmail.com, ORCID: N/A}\n\\and\n\\IEEEauthorblockN{Бранислав Милојковић}\\IEEEauthorblockA{Истраживачка станица Петница\\\\ Ваљево, Србија\\\\ branislav.milojkovic@petnica.rs}}")
-s=s.replace("\\title{", "\\title{\\makebox[\\textwidth][l]{\\normalfont\\normalsize IEEESTEC -- 19th Student Projects Conference, Ni\\v{s}, 2026.}\\\\[-2pt]\\makebox[\\textwidth][l]{\\normalfont\\footnotesize https://doi.org/ (организатор додаје број)}\\\\[-2pt]\\makebox[\\textwidth][l]{\\normalfont\\footnotesize Original scientific paper}\\\\[6pt] ", 1)
+s=s.replace("\\title{", "\\title{\\makebox[\\textwidth][l]{\\normalfont\\normalsize IEEESTEC -- Student Projects Conference, Ni\\v{s}, 2026.}\\\\[-2pt]\\makebox[\\textwidth][l]{\\normalfont\\footnotesize https://doi.org/ (организатор додаје број)}\\\\[-2pt]\\makebox[\\textwidth][l]{\\normalfont\\footnotesize Original scientific paper}\\\\[6pt] ", 1)
 s=s.replace("\\end{abstract}", "\\end{abstract}\n\\begin{IEEEkeywords}\nсинтеза механизама, пантограф, двонивовска оптимизација, генетски алгоритам, ЦМА-ЕС, мешовита оптимизација, Chamfer растојање\n\\end{IEEEkeywords}")
 s=s.replace("\\usepackage[]{natbib}","\\usepackage[numbers,sort&compress]{natbib}")
 s=s.replace("\\bibliographystyle{plainnat}","\\bibliographystyle{IEEEtran}")
