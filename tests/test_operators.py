@@ -327,3 +327,122 @@ def test_reconnect_node_dispatches_flip_sign_above_threshold(monkeypatch, sixbar
     reconnect_node(topology, coords, rng, p_change_anchor=0.70)
 
     assert calls == ["sign"]
+
+
+# --- мртав терет у координатној мутацији (DECISIONS §27.6, исправка 02.10.) ------
+
+
+def _reference_mutate_coords(topology, coords, k, per_node_prob, rng):
+    """Понашање `mutate_coords` ПРЕ исправке од 02.10. — мутира све чворове `1..n−1`.
+
+    Живи у тесту, не у `operators`, зато што служи само као мера: доказује да је исправка
+    променила искључиво СКУП чворова који се мутира, а не расподелу ни редослед узимања
+    насумичних бројева. Да је преписано из `operators.py`, тест не би ништа тврдио.
+    """
+    sigma = k * operators._average_link_length(topology, coords)
+    new_coords = coords.copy()
+    for node in range(1, topology.n_nodes):
+        if rng.uniform() < per_node_prob:
+            new_coords[node] = new_coords[node] + rng.normal(0.0, sigma, size=2)
+    return new_coords
+
+
+def _genome_with_dead_weight(fourbar):
+    """Четворополужни механизам + један мртав чвор, преко `add_node` начина Б.
+
+    Начин Б убацује нов чвор ПРЕД трагача и помера трагача на последњу позицију, па нови
+    чвор остаје ван предачког стабла — исти образац који користи
+    `test_prune_dead_nodes_removes_unused_branch`.
+    """
+    coords = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+    rng = np.random.default_rng(0)
+    return add_node(fourbar, coords, rng, mode="B")
+
+
+def test_mutate_coords_never_moves_dead_node(fourbar):
+    """Чвор ван предачког стабла трагача се после мутације НИКАД нije померио (§27.6).
+
+    Бит-поређење, не `allclose`: додавање нуле није оно што се тврди — тврди се да чвор
+    уопште није био дотакнут.
+    """
+    topology, coords = _genome_with_dead_weight(fourbar)
+    live = operators.live_coordinate_nodes(topology)
+    dead = sorted(set(range(1, topology.n_nodes)) - live)
+    assert dead, "фикстур мора имати бар један мртав чвор, иначе тест ништа не проверава"
+
+    moved_live = False
+    for seed in range(20):
+        new_coords = operators.mutate_coords(
+            topology, coords, k=0.15, per_node_prob=1.0, rng=np.random.default_rng(seed)
+        )
+        for node in dead:
+            assert np.array_equal(new_coords[node], coords[node]), (
+                f"мртав чвор {node} се померио на seed-у {seed}"
+            )
+        assert np.array_equal(new_coords[0], coords[0])  # чвор 0 је закуцан (README 1.3)
+        if any(not np.array_equal(new_coords[n], coords[n]) for n in live):
+            moved_live = True
+    assert moved_live, "ниједан жив чвор се нije померио — мутација не радi ништа"
+
+
+def test_mutate_coords_bit_identical_without_dead_weight(sixbar):
+    """Јединка БЕЗ мртвог терета даје бит-идентичан резултат старом понашању (§27.6).
+
+    Ово је кључна половина исправке: промена је искључиво у прескакању мртвих чворова, не у
+    расподели, не у σ и не у редоследу узимања узорака. Да је редослед померен, нормале би
+    испале друге и овај тест би пао.
+    """
+    topology, coords = sixbar
+    assert operators.live_coordinate_nodes(topology) == set(range(1, topology.n_nodes))
+
+    for seed in range(10):
+        expected = _reference_mutate_coords(
+            topology, coords, 0.15, 0.25, np.random.default_rng(seed)
+        )
+        actual = operators.mutate_coords(
+            topology, coords, k=0.15, per_node_prob=0.25, rng=np.random.default_rng(seed)
+        )
+        assert np.array_equal(actual, expected), f"разлика на seed-у {seed}"
+
+
+def test_mutate_coords_mutates_all_on_unsolvable_topology(fourbar):
+    """Структурно неважећа топологија → скуп живих није одредив → мутирају се сви чворови.
+
+    `baseline.mutate` свесно прослеђује топологије које могу бити неважеће (хвата се тек при
+    евалуацији), па `mutate_coords` не сме да баци изузетак. Понашање у том случају мора
+    остати затечено, и то је исто бит-поређење са референтном петљом.
+    """
+    # Чвор 3 има само једног суседа мањег индекса → `solving_order` баца.
+    broken = Topology(n_nodes=4, edges=[(0, 2), (2, 3)])
+    with pytest.raises(InvalidTopology):
+        solving_order(broken)
+    coords = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+
+    expected = _reference_mutate_coords(broken, coords, 0.15, 0.25, np.random.default_rng(3))
+    actual = operators.mutate_coords(
+        broken, coords, k=0.15, per_node_prob=0.25, rng=np.random.default_rng(3)
+    )
+    assert np.array_equal(actual, expected)
+
+
+def test_live_coordinate_nodes_matches_prune_dead_nodes():
+    """`live_coordinate_nodes` је тачно оно што `prune_dead_nodes` задржава, минус чвор 0.
+
+    Два пута иста ствар би се разишла при првој измени — отуда исти извор истине и овај тест
+    који то тврди над насумичним геномима, не над једним фикстуром.
+    """
+    checked = 0
+    for seed in range(60):
+        rng = np.random.default_rng(seed)
+        result = random_initial_genome(int(rng.integers(5, 9)), rng)
+        if result is None:
+            continue
+        topology, coords = result
+        pruned_topology, _ = prune_dead_nodes(topology, coords)
+        # `prune_dead_nodes` реиндексира, па се задржани чворови не читају са излаза —
+        # реконструишу се истим рачуном из улазне топологије.
+        live = operators.live_coordinate_nodes(topology)
+        assert len(live) + 1 == pruned_topology.n_nodes
+        assert 0 not in live
+        checked += 1
+    assert checked >= 20, f"премало валидних генома за тест ({checked})"

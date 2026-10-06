@@ -5,10 +5,11 @@ from scipy.spatial import cKDTree
 
 from pantograph.curve import TargetCurve
 from pantograph.fitness import evaluate as fitness_evaluate
-from pantograph.genome import Genome, from_sequence, to_sequence
+from pantograph.genome import CRANK, FIXED_B, Genome, from_sequence, to_sequence
 from pantograph.geometry_vector import active_positions, evaluate_vector, skeleton_of, to_sequence_from_x, to_x
-from pantograph.operators import add_node, random_initial_genome
+from pantograph.operators import add_node, live_coordinate_nodes, random_initial_genome
 from pantograph.simulator import CallCounter
+from pantograph.validation import InvalidTopology
 
 
 def _frozen_rho(seq, active):
@@ -131,3 +132,34 @@ def test_evaluate_vector_counts_exactly_one_call_per_invocation():
     for i, x in enumerate([x_valid, x_broken, x_valid, x_broken, x_broken], start=1):
         evaluate_vector(x, skeleton, frozen, active, target, n=90, counter=counter)
         assert counter.calls == i
+
+
+def test_live_coordinate_nodes_matches_active_positions():
+    """Симетрија два метода (DECISIONS §27.6, исправка 02.10.): скуп чворова које монолитни
+    метод координатно мутира мора бити ИСТИ скуп који двонивовски метод држи у ЦМА-ЕС вектору.
+
+    Ово је тест саме тврдње због које је исправка урађена. Леву страну даје
+    `operators.live_coordinate_nodes` (над `Topology`, преко ивица), десну
+    `geometry_vector.active_positions` (над скелетом, без ивица) — две независне
+    имплементације истог обиласка, па поклапање није тауtologija.
+
+    Језгро (`q1`, `q2`, дакле чворови 1 и 2) је увек активно у обе базе: у вектору као
+    `core`, у мутацији експлицитно. Оно се зато вади пре поређења — `active_positions`
+    враћа само позиције `k ≥ 3`.
+    """
+    checked = 0
+    for seed in range(60):
+        rng = np.random.default_rng(seed)
+        result = random_initial_genome(int(rng.integers(5, 9)), rng)
+        if result is None:
+            continue
+        topology, coords = result
+        try:
+            seq = to_sequence(topology, coords)
+        except InvalidTopology:
+            continue
+        live = live_coordinate_nodes(topology)
+        active = set(active_positions(skeleton_of(seq)))
+        assert live - {FIXED_B, CRANK} == active, f"разлика на seed-у {seed}"
+        checked += 1
+    assert checked >= 20, f"премало валидних генома за тест ({checked})"

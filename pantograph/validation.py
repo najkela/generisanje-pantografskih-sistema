@@ -100,6 +100,29 @@ def solving_order(topology: Topology) -> list[Step]:
     return order
 
 
+def tracer_ancestors(n_nodes: int, order: list[Step]) -> set[int]:
+    """Предачко стабло трагача, укључујући њега самог (README 2.3, „Мртав терет").
+
+    Прима већ израчунат `order` из `solving_order`/`validate` — обилазак је само транзитивно
+    затворење `parents_of` од трагача, не рачуна solving order изнова.
+
+    Језгро (`0`, `1`, `2`) НИЈЕ аутоматски у резултату: `parents_of` постоји само за чворове
+    `k ≥ 3`, па се чвор језгра појави једино ако је стварно нечији ослонац. Позиваоци који
+    језгро хоће безусловно (`operators.prune_dead_nodes`, `operators.live_coordinate_nodes`)
+    га додају сами — то им је и смисао, ивица (0,2) није „solving" зависност.
+    """
+    parents_of = {step.target: step.parents for step in order}
+    ancestors = {tracer(n_nodes)}
+    stack = [tracer(n_nodes)]
+    while stack:
+        node = stack.pop()
+        for parent in parents_of.get(node, ()):
+            if parent not in ancestors:
+                ancestors.add(parent)
+                stack.append(parent)
+    return ancestors
+
+
 def check_fixed_b_ancestor(topology: Topology, order: list[Step]) -> None:
     """Провера 6 (ново 01.09., docs/NALAZ_31_08.md НАЛАЗ 1): чвор 1 (FIXED_B) мора бити
     предак трагача.
@@ -114,6 +137,10 @@ def check_fixed_b_ancestor(topology: Topology, order: list[Step]) -> None:
 
     Прима већ израчунат `order` из `validate()` — solving order се не рачуна двапут на
     најтоплијој путањи (сваки позив `fitness.evaluate`).
+
+    Намерно НЕ користи `tracer_ancestors`, иако је обилазак исти: ова провера излази у
+    тренутку кад нађе чвор 1, а `tracer_ancestors` мора да заврши цело затворење. Разлика је
+    мала по чвору, али је ово најтоплија путања у пројекту — сваки позив фитнеса.
     """
     parents_of = {step.target: step.parents for step in order}
     stack = [tracer(topology.n_nodes)]

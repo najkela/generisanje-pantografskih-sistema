@@ -31,7 +31,7 @@ from .genome import (
     tracer,
 )
 from .simulator import circle_intersect_pair
-from .validation import InvalidTopology, solving_order, validate
+from .validation import InvalidTopology, solving_order, tracer_ancestors, validate
 
 
 def random_initial_topology(n_nodes: int, rng: np.random.Generator) -> Topology:
@@ -391,10 +391,31 @@ def mutate_coords(
 
     Потпис допуњен параметром `topology` (30.08.) — без ње се не може израчунати
     просечна дужина полуге; исти образац као `mode`-параметар `add_node`-а.
+
+    **Исправка 02.10. (DECISIONS §27.6):** мутирају се само чворови који могу да утичу на
+    путању — предачко стабло трагача плус чвор 1 и ручица (`live_coordinate_nodes`). Пре ове
+    исправке мутирани су СВИ чворови `1..n−1`, укључујући мртав терет, док их двонивовски
+    метод изоставља из ЦМА-ЕС вектора (§22 А2); у Е2 је то било око 40% координатних
+    мутација у чворове који по конструкцији не могу да промене фитнес. За прескочене чворове
+    се НЕ вуче насумичан број, дакле ток претраге се намерно мења и старе матрице нису
+    упоредиве са новим (§27.10 — понављају се све четири).
+
+    σ и даље усредњава дужине СВИХ полуга, укључујући мртве гране: мења се скуп који се
+    мутира, не мера величине јединке.
     """
     sigma = k * _average_link_length(topology, coords)
+    try:
+        live = live_coordinate_nodes(topology)
+    except InvalidTopology:
+        # `baseline.mutate` свесно прослеђује топологије које могу бити структурно неважеће
+        # (нпр. изолован чвор 1 после `delete_node`) и хвата их тек при евалуацији. Тада
+        # скуп живих чворова није одредив, па остаје затечено понашање — мутирај све.
+        # Јединка је и тако на путу ка казни.
+        live = set(range(1, topology.n_nodes))
     new_coords = coords.copy()
     for node in range(1, topology.n_nodes):
+        if node not in live:
+            continue   # мртав терет — ни новчић се не баца, узорак се не троши у празно
         if rng.uniform() < per_node_prob:
             new_coords[node] = new_coords[node] + rng.normal(0.0, sigma, size=2)
     return new_coords
@@ -417,31 +438,50 @@ def mutate_baseline(
 # --- мртав терет (закључано 30.08., README 2.3, BASELINE_SPEC §4.4) --------------
 
 
+def live_coordinate_nodes(topology: Topology) -> set[int]:
+    """Чворови чије координате могу да утичу на путању трагача (DECISIONS §27.6).
+
+    Предачко стабло трагача, плус чвор 1 и ручица, никад чвор 0. Језгро улази безусловно:
+    чвор 1 носи ротацију и скалирање механизма, ручица носи обртај, а ивица (0,2) није
+    „solving" зависност па их обилазак предака не би нужно обухватио. Чвор 0 је закуцан у
+    (0,0) (README 1.3) и не постоји ни као димензија.
+
+    Исти скуп који `prune_dead_nodes` задржава, минус чвор 0 — обе функције га узимају
+    одавде, да не постоје два рачуна која се разиђу при првој измени. Над скелетом исту
+    ствар рачуна `geometry_vector.active_positions` (без ивица, враћа само позиције `k ≥ 3`);
+    `tests/test_geometry_vector.py` тврди да се два рачуна поклапају — то је симетрија због
+    које је исправка §27.6 и урађена.
+
+    Чвор 0 се одбија изричито на крају: он ЈЕ легитиман ослонац (ивице (0,k) су обичне
+    полуге), па га `tracer_ancestors` врати кад год је предак трагача — али његове
+    координате нису слободне, закуцан је у (0,0).
+
+    Подиже `InvalidTopology` ако топологија не прође `solving_order`.
+    """
+    order = solving_order(topology)
+    live = {FIXED_B, CRANK} | tracer_ancestors(topology.n_nodes, order)
+    return live - {FIXED_A}
+
+
 def prune_dead_nodes(topology: Topology, coords: np.ndarray) -> tuple[Topology, np.ndarray]:
     """Уклања чворове ван предачког стабла tracer-a (README 2.3, „Мртав терет").
 
-    Позива се САМО над коначним резултатом, за приказ и извештај — никад унутар петље
-    претраге (симулатор за фитнес већ решава само претке tracer-a преко `solving_order`,
-    мртве гране не коштају ништа у времену; ово је чисто козметичко скраћивање генома).
+    Позива се над коначним резултатом (за приказ и извештај) и у дијагностици по генерацији
+    (`working_nodes`) — никад у путањи која троши буџет. Симулатор за фитнес већ решава само
+    претке tracer-a преко `solving_order`, па мртве гране не коштају ништа у времену; ово је
+    чисто козметичко скраћивање генома. (Докстринг је до 02.10. тврдио „само над коначним
+    резултатом", што више није тачно од увођења дијагностике.)
 
     Језгро `{0,1,2}` се увек задржава експлицитно — crank-ова ивица (0,2) није „solving"
     зависност (crank/fixed никад нису мете у `parents_of`), па је обилазак предака преко
     tracer-a сам по себи не би нужно обухватио. Реиндексирање је преко `sorted(keep)`;
     tracer увек испадне последњи јер је већ имао највећи индекс у целом геному (исто
     запажање које чини проверу 5 сувишном, в. DECISIONS §16).
-    """
-    order = solving_order(topology)
-    parents_of = {step.target: step.parents for step in order}
-    t = tracer(topology.n_nodes)
 
-    keep = {FIXED_A, FIXED_B, CRANK, t}
-    stack = [t]
-    while stack:
-        node = stack.pop()
-        for parent in parents_of.get(node, ()):
-            if parent not in keep:
-                keep.add(parent)
-                stack.append(parent)
+    Скуп задржаних чворова долази из `live_coordinate_nodes` (02.10.) — исти рачун који
+    координатна мутација користи, један извор истине (§27.6).
+    """
+    keep = {FIXED_A} | live_coordinate_nodes(topology)
 
     kept_sorted = sorted(keep)
     old_to_new = {old: new for new, old in enumerate(kept_sorted)}
