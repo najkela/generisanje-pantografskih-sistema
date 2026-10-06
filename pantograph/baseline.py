@@ -27,6 +27,7 @@ from .experiment import (
 )
 from .fitness import PENALTY, evaluate
 from .genome import Genome, Sequence, from_sequence, link_lengths, to_sequence
+from .geometry_vector import skeleton_key
 from .operators import (
     add_node,
     delete_node,
@@ -326,6 +327,16 @@ def evolve(
                 log.cached_calls += 1   # позив уштеђен кешом елите (§17) — иде у извештај
             else:
                 scores[i] = evaluate(g, target, n_curve, counter=budget_tracker.counter, config=run_config)
+                # Јединствени скелети (OPEN_QUESTIONS 9.2) — ван буџета, `to_sequence` не дира
+                # бројач. Ово је једино место где се свака НЕоцењена јединка види тачно
+                # једном; кеширана елита се не броји поново, скелет јој је већ виђен.
+                try:
+                    key = skeleton_key(to_sequence(g.topology, g.coords))
+                except InvalidTopology:
+                    key = None   # геном без канонске секвенце нема скелет — и тако је кажњен
+                if key is not None and key not in log._seen_skeletons:
+                    log._seen_skeletons.add(key)
+                    log.unique_skeletons += 1
         previous_n_curve = n_curve
         best_index = int(np.argmin(scores))
         best_score = float(scores[best_index])

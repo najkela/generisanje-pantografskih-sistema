@@ -91,6 +91,16 @@ def _invalid_record() -> TopologyRecord:
     )
 
 
+def _charge_penalty(log: "RunLog | None", calls: int = 1) -> None:
+    """Приписује `calls` позива бројачу казнених записа (OPEN_QUESTIONS 9.1), ако лог постоји.
+
+    Одвојено од самог `budget.spend()` зато што буџет мора да се троши и кад лога нема
+    (директни тестови `_make_child`-а га не прослеђују) — бројач је извештајни, не механика.
+    """
+    if log is not None:
+        log.penalty_record_calls += calls
+
+
 class RhoOutOfBounds(Exception):
     """`ρ` димензија почетне тачке ЦМА-ЕС-а ван `[cma_rho_lower, cma_rho_upper]`
     (DECISIONS §24, А1). Не би смело да се деси код законитих оператора — границе су
@@ -485,22 +495,29 @@ def _initialize_population(config: Config, rng_init: np.random.Generator) -> lis
 
 
 def _make_child(
-    parent_record: TopologyRecord, config: Config, rng_mut: np.random.Generator, budget: Budget
+    parent_record: TopologyRecord, config: Config, rng_mut: np.random.Generator, budget: Budget,
+    log: "RunLog | None" = None,
 ) -> TopologyRecord:
     """Дете спољашњег ГА: тополошка само-мутација родитеља + warm-start (В5 корак 4).
 
     Невалидно дете (пад на `validation.validate` или circuit defect у `to_sequence`, или
     родитељ без реконструктибилне геометрије) наплаћује тачно један позив и не добија
     ЦМА-ЕС (DECISIONS §22 А6) — умире при следећој селекцији.
+
+    `log` је опциони — ако је прослеђен, тај један позив улази и у `penalty_record_calls`
+    (OPEN_QUESTIONS 9.1): он се троши, али се нигде није видео. Бројач не мења ни један
+    насумичан број ни ток претраге.
     """
     parent_genome = _record_to_genome(parent_record)
     if parent_genome is None:
         budget.spend()
+        _charge_penalty(log)
         return _invalid_record()
 
     mutation = _mutate_topology(parent_genome, config, rng_mut)
     if mutation is None:
         budget.spend()
+        _charge_penalty(log)
         return _invalid_record()
     child_topology, child_coords, index_map, operator_name = mutation
 
@@ -509,6 +526,7 @@ def _make_child(
         child_seq = to_sequence(child_topology, child_coords)
     except InvalidTopology:
         budget.spend()
+        _charge_penalty(log)
         return _invalid_record()
 
     child_skeleton = skeleton_of(child_seq)
@@ -534,10 +552,14 @@ def _next_generation(
     rng_select: np.random.Generator,
     rng_mut: np.random.Generator,
     budget: Budget,
+    log: "RunLog | None" = None,
 ) -> list[TopologyRecord]:
     """Једна генерација спољашњег ГА (В5 кораци 2–5): елита `round(0.20·P)` преживљава СА
     својим живим ЦМА-ЕС објектом (А3 — наставља се, не рестартује); остатак су деца,
-    родитељ равномерно из горње половине, дете тополошком само-мутацијом (А7)."""
+    родитељ равномерно из горње половине, дете тополошком само-мутацијом (А7).
+
+    `log` се само прослеђује `_make_child`-у, за бројач казнених позива (OPEN_QUESTIONS 9.1).
+    """
     p = len(population)
     order = np.argsort(scores)
     ranked = [population[i] for i in order]
@@ -549,7 +571,7 @@ def _next_generation(
     next_population = list(elite)
     for _ in range(p - n_elite):
         parent = upper_half[int(rng_select.integers(len(upper_half)))]
-        next_population.append(_make_child(parent, config, rng_mut, budget))
+        next_population.append(_make_child(parent, config, rng_mut, budget, log))
     return next_population
 
 
@@ -653,7 +675,14 @@ def outer_ga(
             if record.skeleton is None:
                 continue  # мртав запис (А6) — нема шта да се оптимизује
             record.rng = cma_rng(seed, generation, slot)  # позиционо семе (§24, В2)
+            # Казнени позиви (OPEN_QUESTIONS 9.1): делта буџета око позива, а не
+            # `record.calls` — то поље је кумулативно кроз генерације и не обухвата
+            # прекинуту последњу итерацију (в. `inner_cmaes`, грана непотпуне популације).
+            # Делта хвата и наплату за `RhoOutOfBounds`, која се дешава унутар позива.
+            spent_before = budget_tracker.spent
             inner_cmaes(record, target, n_curve, budget_tracker, run_config, log)
+            if record.best_fitness >= PENALTY:
+                log.penalty_record_calls += budget_tracker.spent - spent_before
 
         scores = np.array([r.best_fitness for r in population])
         best_index = int(np.argmin(scores))
@@ -700,7 +729,9 @@ def outer_ga(
         ):
             break
 
-        population = _next_generation(population, scores, run_config, rng_select, rng_mut, budget_tracker)
+        population = _next_generation(
+            population, scores, run_config, rng_select, rng_mut, budget_tracker, log
+        )
         generation += 1
 
     log.flush_grid(run_config.total_budget)

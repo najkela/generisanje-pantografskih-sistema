@@ -158,8 +158,25 @@ class RunLog:
     # поништава, па елита не кошта ништа од прве генерације до краја — без овог броја се
     # не зна колико је ЕФЕКТИВНИХ евалуација заиста било. Bilevel га никад не увећава.
     cached_calls: int = 0
+    # Позиви потрошени у `bilevel.inner_cmaes` над записима који у тој генерацији нису нашли
+    # ниједну важећу тачку (`best_fitness` остаје на `PENALTY`), плус по један позив за мртве
+    # записе из §22 А6 (скелет падне на `validate()` или на канонизацију) — OPEN_QUESTIONS 9.1.
+    # Мери се као делта `Budget.spent` око позива, не преко `TopologyRecord.calls`: то поље је
+    # кумулативно кроз генерације и не обухвата прекинуту последњу итерацију. Baseline га
+    # никад не увећава. НЕ обухвата преоцену на промену N (ван `inner_cmaes`; у режиму
+    # поређења је N фиксно, па те гране ни нема).
+    penalty_record_calls: int = 0
+    # Број ЈЕДИНСТВЕНИХ скелета које је монолитни метод оценио — хеш `(n_nodes, genes без ρ)`,
+    # исти облик који `geometry_vector.skeleton_of` производи (OPEN_QUESTIONS 9.2). Рад је
+    # досад поредио 125 000 ЈЕДИНКИ са око 580 СКЕЛЕТА, што нису исте величине. Већина деце
+    # дели скелет са родитељем (`p_topo = 0.30`), па је овај број знатно мањи од броја позива.
+    # Bilevel га никад не увећава — њему је скелет сам геном спољашњег нивоа.
+    unique_skeletons: int = 0
     _grid_last_calls: int = 0
     _grid_last_value: float = float("nan")
+    # Виђени скелети — радно стање за `unique_skeletons`, НЕ серијализује се (исти образац као
+    # `_grid_last_*`). Расте до броја јединствених скелета, не до броја јединки.
+    _seen_skeletons: set[tuple] = field(default_factory=set)
 
     def update_grid(self, calls_spent: int, best_so_far: float) -> None:
         """Попуни тачке решетке пређене од претходног осматрања (§24.2).
@@ -235,6 +252,8 @@ class RunLog:
             "grid_step": self.grid_step,
             "calls_curve": [[int(c), float(v)] for c, v in self.calls_curve],
             "cached_calls": self.cached_calls,
+            "penalty_record_calls": self.penalty_record_calls,
+            "unique_skeletons": self.unique_skeletons,
             "records": [asdict(r) for r in self.records],
             "best_genome": _genome_to_dict(self.best_genome) if self.best_genome is not None else None,
         }
@@ -272,6 +291,8 @@ class RunLog:
             grid_step=data.get("grid_step", 500),
             calls_curve=[(int(c), float(v)) for c, v in data.get("calls_curve", [])],
             cached_calls=data.get("cached_calls", 0),
+            penalty_record_calls=data.get("penalty_record_calls", 0),
+            unique_skeletons=data.get("unique_skeletons", 0),
         )
 
 

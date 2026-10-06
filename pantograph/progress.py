@@ -269,6 +269,25 @@ class ProgressReporter:
             ("затварање петље", f"{last.path_loop_closure:.2f}× медијане корака"),
             ("гломазност", f"{last.link_to_radius_ratio:.2f}× (полуга/путања)"),
         ]
+        # Стварна цена покретања (§25.3, OPEN_QUESTIONS 9.1/9.2) — три броја која су досад
+        # живела само у `log.json`. Сваки важи за тачно један метод, па се не исписује ред
+        # који би свуда био нула.
+        if log.cached_calls:
+            rows.append((
+                "кеш елите",
+                f"{_thousands(log.cached_calls)} позива уштеђено "
+                f"({100.0 * log.cached_calls / max(last.calls_spent + log.cached_calls, 1):.1f}% евалуација)",
+            ))
+        if log.method == "baseline":
+            rows.append(("јединствених скелета", _thousands(log.unique_skeletons)))
+        if log.method == "bilevel":
+            percent_penalty = (
+                100.0 * log.penalty_record_calls / last.calls_spent if last.calls_spent else 0.0
+            )
+            rows.append((
+                "казнени записи",
+                f"{_thousands(log.penalty_record_calls)} позива ({percent_penalty:.1f}% потрошеног)",
+            ))
         if self._snapshots:
             rows.append(("снимака", f"{len(self._snapshots)} у snapshots/"))
         if self.run_dir:

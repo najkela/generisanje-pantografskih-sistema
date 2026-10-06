@@ -26,6 +26,18 @@ def skeleton_of(seq: Sequence) -> TopologySkeleton:
     return TopologySkeleton(n_nodes=n_nodes, genes=genes)
 
 
+def skeleton_key(seq: Sequence) -> tuple[int, tuple[tuple[int, int, int], ...]]:
+    """Хешабилан облик скелета — `(n_nodes, genes)` (OPEN_QUESTIONS 9.2).
+
+    `skeleton_of` враћа `TopologySkeleton`, који је dataclass са `list` пољем, дакле
+    нехешабилан и неупотребљив као кључ `set`-а. Садржај је исти — одбачено `ρ`, остају
+    позиције ослонаца и знак гране — само у непроменљивом облику. Једини извор облика кључа,
+    да `baseline` и `bilevel` броје исту ствар.
+    """
+    skeleton = skeleton_of(seq)
+    return skeleton.n_nodes, tuple(skeleton.genes)
+
+
 def active_positions(skeleton: TopologySkeleton) -> list[int]:
     """Позиције `k ≥ 3` из предачког стабла трагача (DECISIONS §22, А2).
 
