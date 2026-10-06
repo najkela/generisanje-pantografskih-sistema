@@ -67,6 +67,13 @@
 \renewcommand{\refname}{Literatura}
 \def\abstractname{Sažetak}
 \def\IEEEkeywordsname{Ključne reči}
+% srpska pravila rastavljanja reči na kraju reda (hyph-sr-latn iz language.dat)
+\makeatletter
+\expandafter\ifx\csname l@serbian\endcsname\relax\else
+  \language\csname l@serbian\endcsname
+  \lefthyphenmin=2 \righthyphenmin=2
+\fi
+\makeatother
 \ifLuaTeX
   \usepackage{selnolig}  % disable illegal ligatures
 \fi
@@ -78,8 +85,9 @@
 \hypersetup{
   pdftitle={Generisanje pantografskih mehanizama dvonivovskom optimizacijom: prenos i proširenje informaciono-geometrijske dekompozicije na grafove promenljive veličine},
   pdfauthor={Nikola Najić; Mentor: Branislav Milojković},
-  pdfkeywords={sinteza mehanizama, pantograf, dvonivovska optimizacija,
-genetski algoritam, CMA-ES, mešovita optimizacija, Chamfer rastojanje},
+  pdfkeywords={sinteza mehanizama, pantografski mehanizam, dvonivovska
+optimizacija, genetski algoritam, CMA-ES, mešovita optimizacija, Chamfer
+rastojanje},
   hidelinks,
   pdfcreator={LaTeX via pandoc}}
 
@@ -106,14 +114,15 @@ okvir ne pokriva. Zapisom preko sekvence sklapanja problem pri fiksnom
 broju čvorova \(n\) postaje tačno njihov oblik \(\min f(c,x)\), sa
 \(d_c = 2(n-3)\) i \(d_x = 2n-2\). Pri istom budžetu od 100~000 poziva
 simulatora, na pet krivih i četiri postavke, dvonivovski metod ---
-genetski algoritam nad topologijom i CMA-ES (evoluciona strategija sa
-adaptacijom kovarijansne matrice) nad geometrijom --- daje nižu grešku
-od monolitnog genetskog algoritma u 18 od 20 ćelija (medijana odnosa
-0.62×, 95\% interval 0.40--0.76), a njegov konačni rezultat dostiže na
-četvrtini budžeta, bez gubitka fizičke izvodljivosti.
+genetski algoritam nad topologijom i CMA-ES (\emph{Covariance Matrix
+Adaptation Evolution Strategy}, evoluciona strategija sa adaptacijom
+kovarijansne matrice) nad geometrijom --- daje nižu grešku od monolitnog
+genetskog algoritma u 18 od 20 ćelija (medijana odnosa 0.62×, 95\%
+interval 0.40--0.76), a njegov konačni rezultat dostiže na četvrtini
+budžeta, bez gubitka fizičke izvodljivosti.
 \end{abstract}
 \begin{IEEEkeywords}
-sinteza mehanizama, pantograf, dvonivovska optimizacija, genetski algoritam, CMA-ES, mešovita optimizacija, Chamfer rastojanje
+sinteza mehanizama, pantografski mehanizam, dvonivovska optimizacija, genetski algoritam, CMA-ES, mešovita optimizacija, Chamfer rastojanje
 \end{IEEEkeywords}
 
 \hypertarget{uvod}{%
@@ -151,11 +160,11 @@ i sami navode da višeopcione kategoričke promenljive ostaju netestirane.
 
 Sinteza mehanizama sa promenljivim brojem zglobova izlazi iz tog okvira,
 jer broj čvorova menja i \(d_c\) i \(d_x\). Rad ima dva cilja: (1)
-\textbf{prenos} --- pokazati da je sinteza pantografa pri fiksnom \(n\)
-instanca klase problema iz \citep{igbd} i da preporuka koja iz tog rada
-sledi daje prednost i na stvarnom zadatku; (2) \textbf{proširenje} ---
-pokazati da dvonivovska podela sa populacijskim spoljašnjim nivoom radi
-i kada se broj čvorova menja tokom pretrage.
+\textbf{prenos} --- pokazati da je sinteza pantografskih mehanizama pri
+fiksnom \(n\) instanca klase problema iz \citep{igbd} i da preporuka
+koja iz tog rada sledi daje prednost i na stvarnom zadatku; (2)
+\textbf{proširenje} --- pokazati da dvonivovska podela sa populacijskim
+spoljašnjim nivoom radi i kada se broj čvorova menja tokom pretrage.
 
 Hipoteza H1 glasi: pri istom budžetu poziva simulatora dvonivovski metod
 (genetski algoritam nad topologijom + CMA-ES nad geometrijom) daje nižu
@@ -203,9 +212,8 @@ svakih \(0.5^\circ\). Ta vrednost je izmerena, ne pretpostavljena: za
 zdrave jedinke Chamfer rastojanje monotono opada sa \(N\) i konvergira,
 pa prelaz sa 360 na 720 menja vrednost za \(0.3\%\), a sa 720 na 2880 za
 \(0.1\%\). Grana preseka \(s_k\) određuje se jednom, u početnom
-položaju, i važi na svakom uglu --- prelazak na drugu granu zahtevao bi
-prolaz kroz mrtvu tačku, koju prag ugla prenosa odbija, pa je putanja
-neprekidna po konstrukciji.
+položaju, : prelazak na drugu granu tražio bi prolaz kroz mrtvu tačku,
+koju prag ugla prenosa odbija, pa je putanja neprekidna po konstrukciji.
 
 Jedinka je \textbf{neizvodljiva} ako u bilo kom uglu krugovi nemaju
 presek, ako ugao prenosa (meren kao odstupanje od mrtve tačke) padne
@@ -263,22 +271,23 @@ pretražuju prostor iste veličine.
 \hypertarget{metode}{%
 \section{Metode}\label{metode}}
 
-Monolitni genetski algoritam (u daljem tekstu MGA) menja topologiju i
-geometriju u istom koraku. To je standardan GA po uzoru na Cabrera i
-sar. \citep{cabrera}: populacija 100, elitnih 20\% nepromenjeno, ostatak
-ukrštanjem (rez sekvence sklapanja) uz topološku (0.30) i koordinatnu
-mutaciju (0.70). Koordinatna mutacija dodaje čvorovima izotropni Gausov
-šum širine srazmerne prosečnoj dužini poluge, sa koeficijentom koji
-opada od 0.15 do 0.02 po udelu potrošenog budžeta.
+Monolitni genetski algoritam (\emph{genetic algorithm}, u daljem tekstu
+MGA) menja topologiju i geometriju u istom koraku. To je standardan GA
+po uzoru na Cabrera i sar. \citep{cabrera}: populacija 100, elitnih 20\%
+nepromenjeno, ostatak ukrštanjem (rez sekvence sklapanja) uz topološku
+(0.30) i koordinatnu mutaciju (0.70). Koordinatna mutacija dodaje
+izotropni Gausov šum širine srazmerne prosečnoj dužini poluge, sa
+koeficijentom koji opada od 0.15 do 0.02 po udelu potrošenog budžeta.
 
 Dvonivovski metod (DN) cepa istu sekvencu po gornjem preslikavanju.
 Spoljašnji nivo je genetski algoritam sa 20 skeleta: najbolja četiri
 prelaze dalje sa svojim živim stanjem CMA-ES-a, a 16 novih nastaje
 topološkom mutacijom roditelja iz gornje polovine; ukrštanja nema.
-Unutrašnji nivo je CMA-ES \citep{hansen} sa punom kovarijansnom matricom
-nad \(x\), sa dinamičkim brojem iteracija. Tri stvari ga prilagođavaju
-problemu: mrtvi čvorovi ne zauzimaju dimenzije vektora; dete počinje od
-najbolje tačke roditelja i nasleđuje dijagonalu njegove širine raspodele
+Unutrašnji nivo je CMA-ES (\emph{Covariance Matrix Adaptation Evolution
+Strategy}) \citep{hansen} sa punom kovarijansnom matricom nad \(x\), sa
+dinamičkim brojem iteracija. Tri stvari ga prilagođavaju problemu: mrtvi
+čvorovi ne zauzimaju dimenzije vektora; dete počinje od najbolje tačke
+roditelja i nasleđuje dijagonalu njegove širine raspodele
 \citep{nomura}; znak grane pripada topologiji, ne vektoru.
 
 Topološki operatori su zajednički za oba metoda: pri promenljivom \(n\)
@@ -288,11 +297,10 @@ prepovezivanje --- zamena jednog oslonca (0.70) ili obrtanje znaka grane
 
 Jedinica troška je jedan poziv simulatora --- jedna ocena jednog
 kandidata, kod MGA jedna jedinka, kod DN svaka tačka koju CMA-ES
-uzorkuje, uključujući one koje padnu već na rekonstrukciji. Isto
-brojanje koriste Ong i sar. \citep{igbd}. Skelet koji prođe strukturnu
-proveru, a čija je putanja degenerisana tokom obrtaja, ipak dobija
-CMA-ES i troši pozive dok se plato ne napuni; taj udeo budžeta biće
-zasebno izmeren.
+uzorkuje, uključujući one koje padnu već na rekonstrukciji. Skelet koji
+prođe strukturnu proveru, a čija je putanja degenerisana tokom obrtaja,
+ipak dobija CMA-ES i troši pozive dok se plato ne napuni; taj udeo
+budžeta biće zasebno izmeren.
 
 Sva pokretanja idu u režimu poređenja: rezolucija fiksno \(N = 720\),
 budžet 100~000 poziva za oba metoda, bez ranog zaustavljanja, uz zapis
@@ -309,8 +317,7 @@ Eksperiment \textbf{E1} (fiksno \(n \in \{6,7,8\}\)) je prenos,
 postavka, sa šest seed-ova (pet za \(n=7\), gde je jedno pokretanje
 izgubljeno i nije ponovljeno), ukupno 242 pokretanja. Tokovi slučajnih
 brojeva razdvojeni su po ulozi, a CMA-ES svakog skeleta dobija tok
-izveden iz trojke (seed, generacija, mesto u populaciji); svako
-pokretanje beleži komit koda.
+izveden iz trojke (seed, generacija, mesto u populaciji).
 
 Greške se pružaju kroz deset redova veličine, pa se sva poređenja rade
 nad \(\log_{10}\) greške. Primarni test je Vilkoksonov upareni test
@@ -331,9 +338,9 @@ Tabela \ref{tab:glavno} daje glavni rezultat. Preko svih dvadeset ćelija
 medijana odnosa je \textbf{0.62×} (95\% interval 0.40--0.76),
 Vilkoksonov upareni test daje \(p = 1.0\cdot10^{-4}\), a dvonivovski
 metod je bolji u 18 od 20 ćelija i u 89 od 115 pojedinačnih parova.
-Prednost postoji u sve četiri postavke, ali ne podjednako: medijana po
-ćelijama najslabija je na \(n = 6\) (0.82×), a jedna ćelija ide u korist
-monolitnog metoda na \(n = 7\) (Kasinijev oval, 1.54×).
+Prednost postoji u sve četiri postavke, ali ne podjednako: najslabija je
+na \(n = 6\) (0.82×), a jedna ćelija ide u korist monolitnog metoda
+(Kasinijev oval pri \(n = 7\), 1.54×).
 
 \begin{table}[t]
 \caption{Poređenje konačnih grešaka po ćelijama (kriva $\times$ postavka), bez kruga. Odnos {<}1 znači da je DN bolji.}
@@ -381,15 +388,15 @@ rešenja ima ugao prenosa između \(10^\circ\) i \(15^\circ\), a polovina
 glomaznost iznad 4.5. Pri fiksnom \(n\) DN ostvaruje manju grešku sa
 manje radnih čvorova (5--6 naspram 6--7). Ali dve krive na kojima DN
 nema jasnu prednost --- Kasinijev oval i superelipsa --- jedine su na
-kojima nijedno od 46 pokretanja nije sišlo ispod \(4\cdot10^{-4}\), uz
-raspon svih rezultata od 6--18×: pri datom \(n\) oba metoda stižu do
-istog poda, koji zavisi od \(n\) (na superelipsi \(3.5\cdot10^{-3}\) pri
-\(n=6\), \(2.0\cdot10^{-3}\) pri \(n=8\)). Taj pod daje i merilo
-veličine efekta: ceo dodatni čvor vredi 1.75×, pa je 0.62× po tom merilu
-krupan pomak. Tu se vidi vrednost proširenja: u E2 DN sam raste do 9
-radnih čvorova i stiže do \(2.1\cdot10^{-3}\), dok MGA ostaje na 5.5
-radnih čvorova i \(3.6\cdot10^{-3}\) --- prednost nije bolji optimum pri
-istom \(n\), nego bolji izbor veličine mehanizma.
+kojima nijedno od 46 pokretanja nije sišlo ispod \(4\cdot10^{-4}\): pri
+datom \(n\) oba metoda stižu do istog poda, koji zavisi od \(n\) (na
+superelipsi \(3.5\cdot10^{-3}\) pri \(n=6\), \(2.0\cdot10^{-3}\) pri
+\(n=8\)). Taj pod daje i merilo veličine efekta: ceo dodatni čvor vredi
+1.75×, pa je 0.62× po tom merilu krupan pomak. Tu se vidi vrednost
+proširenja: u E2 DN sam raste do 9 radnih čvorova i stiže do
+\(2.1\cdot10^{-3}\), dok MGA ostaje na 5.5 radnih čvorova i
+\(3.6\cdot10^{-3}\) --- prednost nije bolji optimum pri istom \(n\),
+nego bolji izbor veličine mehanizma.
 
 \hypertarget{diskusija}{%
 \section{Diskusija}\label{diskusija}}
@@ -402,7 +409,7 @@ utiču na putanju --- pri \(n=8\) rade svih osam čvorova u samo 25.5\%
 generacija --- što je tip I po konstrukciji; oni navode da tip I traži
 poseban tretman u donjem nivou, a ovde je to izostavljanje mrtvih
 dimenzija. Promena oslonca ili znaka menja značenje svake komponente
-nizvodnih čvorova --- tip II. Problem je najmanje tip III.
+nizvodnih čvorova --- tip II, dakle najmanje tip III.
 
 Za tip IV Hesijan funkcije cilja po \(x\) meren je konačnim razlikama u
 prijavljenim rešenjima matrice sa fiksnim \(n = 8\), dakle na istim
@@ -438,14 +445,13 @@ naspram \(2\cdot10^4 d_c d_x\) koliko propisuje njihov protokol (za
 Mera je uzeta nad šest seed-ova po ćeliji (pet za \(n=7\)), naspram
 dvadeset u referentnom radu, i nad jednom klasom ciljnih krivih. U E2
 koordinatna mutacija monolitnog metoda pogađa i čvorove van predačkog
-stabla (medijalno 8.5 čvorova naspram 5 radnih), koji po konstrukciji ne
-mogu da promene vrednost funkcije cilja, dok ih dvonivovski metod
-izostavlja iz vektora; ta asimetrija ide u korist dvonivovskog metoda i
-verovatno precenjuje njegovu prednost u E2, dok E1, gde mrtvog tereta
-gotovo da nema, njome nije zahvaćen. Najzad, redukovani spektar Hesijana
-ima medijalno tri negativne sopstvene vrednosti, dakle prijavljeno
-najbolje rešenje nije strogi lokalni minimum: oba metoda staju pre nego
-što je unutrašnji problem rešen do kraja.
+stabla (medijalno 8.5 čvorova naspram 5 radnih), dok ih dvonivovski
+metod izostavlja iz vektora; ta asimetrija ide u korist dvonivovskog
+metoda i verovatno precenjuje njegovu prednost u E2, dok E1, gde mrtvog
+tereta gotovo da nema, njome nije zahvaćen. Najzad, redukovani spektar
+Hesijana ima medijalno tri negativne sopstvene vrednosti, dakle
+prijavljeno najbolje rešenje nije strogi lokalni minimum: oba metoda
+staju pre nego što je unutrašnji problem rešen do kraja.
 
 \hypertarget{zakljuux10dak}{%
 \section{Zaključak}\label{zakljuux10dak}}
@@ -457,9 +463,9 @@ dvonivovski metod pri istom budžetu daje nižu grešku od monolitnog u 18
 od 20 ćelija (medijana 0.62×), do rezultata monolitnog metoda dolazi na
 četvrtini budžeta, bez gubitka fizičke izvodljivosti i sa manje radnih
 čvorova. Prednost opstaje i pri promenljivom broju čvorova, gde okvir iz
-reference ne važi, i tamo metod sam bira veličinu mehanizma koju kriva
-zahteva. Prednost nestaje tamo gde oba metoda pri datom broju čvorova
-stignu do granice same familije mehanizama.
+reference ne važi, i tamo metod sam bira veličinu mehanizma. Prednost
+nestaje tamo gde oba metoda pri datom broju čvorova stignu do granice
+same familije mehanizama.
 
 Dalji rad ide u tri pravca. Prvi je poređenje sa CatCMA i IGBD, jer se
 tek njima razdvaja koliko prednosti dolazi od podele na nivoe, a koliko
@@ -474,10 +480,10 @@ asistent zasnovan na velikom jezičkom modelu (Claude, Anthropic); svako
 merenje i zaključak autor je proverio, a kôd i logovi su objavljeni da
 provera bude moguća i sa strane.
 
-Kod, logovi svih pokretanja i tačne komande nalaze se na
+Kôd, logovi svih pokretanja i tačne komande nalaze se na
 \texttt{github.com/najkela/generisanje-pantografskih-sistema}, oznaka
 \texttt{ieeestec-2026}.
 
-  \footnotesize\bibliography{bib.bib}
+  \scriptsize\bibliography{bib.bib}
 
 \end{document}

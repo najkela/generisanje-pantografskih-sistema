@@ -10,7 +10,7 @@ IME={"ellipse":"elipsa","egg":"jaje","limacon":"limason","cassini":"Kasinijev ov
 def krive(mat,k,m):
     C=[np.array(d["calls"]) for d in D if d["mat"]==mat and d["curve"]==k and d["method"]==m]
     return C[0][:,0], np.array([c[:,1] for c in C])
-fig,ax=plt.subplots(1,2,figsize=(3.4,1.36))
+fig,ax=plt.subplots(1,2,figsize=(3.4,1.20))
 for a,(mat,k,nas) in zip(ax,[("e1_n6","limacon","limason, n = 6"),("e1_n7","egg","jaje, n = 7")]):
     for m,col,lab in (("baseline",BA,"MGA"),("bilevel",BI,"DN")):
         x,Y=krive(mat,k,m)

@@ -6,3 +6,10 @@
 \renewcommand{\refname}{Literatura}
 \def\abstractname{Sažetak}
 \def\IEEEkeywordsname{Ključne reči}
+% srpska pravila rastavljanja reči na kraju reda (hyph-sr-latn iz language.dat)
+\makeatletter
+\expandafter\ifx\csname l@serbian\endcsname\relax\else
+  \language\csname l@serbian\endcsname
+  \lefthyphenmin=2 \righthyphenmin=2
+\fi
+\makeatother
