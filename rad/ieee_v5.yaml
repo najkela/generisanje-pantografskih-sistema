@@ -1,0 +1,10 @@
+documentclass: IEEEtran
+classoption:
+  - conference
+  - a4paper
+  - 10pt
+mainfont: TeX Gyre Termes
+sansfont: TeX Gyre Heros
+monofont: TeX Gyre Cursor
+mathfont: Latin Modern Math
+link-citations: true
